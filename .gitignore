@@ -93,6 +93,13 @@ slurm-*.err
 *.out
 *.err
 
+# Files to be ignored for local testing and datasets imported from rangpur to local
+# system.
+adni_subset/
+*.tar.gz
+*.tgz
+*.zip
+
 # ---------------------------------------------------------------------------
 # NOT ignored, on purpose
 # ---------------------------------------------------------------------------
