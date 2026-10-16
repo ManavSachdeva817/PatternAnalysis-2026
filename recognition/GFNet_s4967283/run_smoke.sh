@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH --job-name=adni_smoke
 #SBATCH --partition=comp3710
+#SBATCH --account=comp3710
 #SBATCH --gres=gpu:a100:1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=00:30:00
