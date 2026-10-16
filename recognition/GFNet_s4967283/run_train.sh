@@ -1,0 +1,64 @@
+#!/bin/bash
+# Full training run on one A100. Takes the model name and the seed as arguments
+# so I do not need a separate script per run.
+#
+#   sbatch run_train.sh baseline 42
+#   sbatch run_train.sh gfnet 42
+#
+# For the three-seed comparison later:
+#   for s in 42 1 2; do sbatch run_train.sh baseline $s; done
+#   for s in 42 1 2; do sbatch run_train.sh gfnet $s; done
+#
+# Each run writes into its own output folder, outputs_<model>_seed<seed>, so
+# runs never overwrite each other's weights or metrics.
+
+#SBATCH --job-name=adni_train
+#SBATCH --partition=comp3710
+#SBATCH --account=comp3710
+#SBATCH --gres=gpu:a100:1
+#SBATCH --cpus-per-task=8
+#SBATCH --time=02:00:00
+#SBATCH --output=logs/%x_%j.out
+#SBATCH --error=logs/%x_%j.err
+
+# SLURM settings, all learned the hard way on Demo 2:
+#   - comp3710 is the partition allocated to this course. The shared a100
+#     partition puts me behind cosc3500 and a100-grind users on the same nodes.
+#   - --gres must be typed as gpu:a100:1. A bare gpu:1 does not match.
+#   - No --mem line at all. Slurm reports RealMemory=1 on these nodes, so any
+#     memory request gets the job rejected.
+#   - --time=02:00:00 because the smoke test measured 16 s/epoch for the
+#     baseline, and GFNet should land somewhere near 90 s/epoch. Thirty epochs
+#     of GFNet is therefore well under an hour, and two hours leaves room for a
+#     slow queue without over-reserving. The partition default is three hours,
+#     which blocks backfill and schedules later.
+
+MODEL=${1:-baseline}
+SEED=${2:-42}
+EPOCHS=${3:-30}
+
+OUTPUT_DIR="outputs_${MODEL}_seed${SEED}"
+
+# A fresh shell on the compute node does not carry my activated venv.
+source ~/venvs/comp3710/bin/activate
+
+echo "=== environment check ==="
+which python
+python -c "import torch; print('torch', torch.__version__, 'cuda:', torch.cuda.is_available())"
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+echo "model=$MODEL seed=$SEED epochs=$EPOCHS output=$OUTPUT_DIR"
+echo "========================="
+echo
+
+# Learning rate 3e-4 rather than the 1e-3 I used in the smoke test. At 1e-3 the
+# baseline's validation loss went 0.708 -> 0.462 -> 1.247 over three epochs and
+# the model fell back to predicting a single class, which is the signature of
+# steps that are too large rather than of overfitting.
+python train.py \
+    --model "$MODEL" \
+    --epochs "$EPOCHS" \
+    --batch-size 64 \
+    --learning-rate 3e-4 \
+    --seed "$SEED" \
+    --num-workers 8 \
+    --output-dir "$OUTPUT_DIR"
