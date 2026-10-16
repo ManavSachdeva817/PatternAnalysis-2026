@@ -47,9 +47,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-from dataset import get_dataloaders, DEFAULT_ADNI_ROOT, LABEL_TO_CLASS
+from dataset import get_dataloaders, DEFAULT_ADNI_ROOT, LABEL_TO_CLASS, IMAGE_SIZE
 from modules import BaselineCNN, count_trainable_parameters
-
 
 def set_all_seeds(seed):
     """
@@ -370,7 +369,7 @@ def main():
     print("  test batches: %d" % len(test_loader))
 
     # ---- Model ----
-    model = build_model(arguments.model).to(device)
+    model = build_model(arguments.model, image_size=IMAGE_SIZE).to(device)
     parameter_count = count_trainable_parameters(model)
     print()
     print("Model: %s with %d trainable parameters" % (arguments.model, parameter_count))
