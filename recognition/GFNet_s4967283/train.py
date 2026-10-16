@@ -48,7 +48,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 from dataset import get_dataloaders, DEFAULT_ADNI_ROOT, LABEL_TO_CLASS, IMAGE_SIZE
-from modules import BaselineCNN, count_trainable_parameters
+from modules import build_model, count_trainable_parameters
 
 def set_all_seeds(seed):
     """
@@ -82,25 +82,6 @@ def pick_device():
         device = torch.device("cpu")
         print("No GPU found, running on CPU. This will be slow.")
     return device
-
-
-def build_model(model_name):
-    """
-    Create the model by name.
-
-    GFNet is not written yet, so asking for it raises a clear error rather
-    than failing somewhere confusing later.
-    """
-    if model_name == "baseline":
-        return BaselineCNN(in_channels=1, num_classes=2)
-
-    if model_name == "gfnet":
-        raise NotImplementedError(
-            "GFNet is not implemented yet. Use --model baseline for now."
-        )
-
-    raise ValueError("Unknown model name: %s" % model_name)
-
 
 def run_one_epoch(model, loader, loss_function, optimiser, device, is_training):
     """
