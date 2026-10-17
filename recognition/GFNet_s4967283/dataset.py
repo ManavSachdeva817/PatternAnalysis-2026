@@ -227,53 +227,49 @@ def check_no_patient_overlap(train_samples, validation_samples, test_samples):
                 % (name_a, name_b, len(shared), sorted(shared)[:5])
             )
 
-
-def build_transforms(is_training):
+def build_transforms(is_training, augmentation_strength="normal"):
     """
     Build the image preprocessing pipeline.
 
-    Shared by every split: convert to single-channel greyscale, resize to a
-    square, turn into a tensor, normalise.
+    augmentation_strength controls how hard the training augmentation is.
 
-    Training only, on top of that:
+      "normal" - what I used for the first runs.
+      "strong" - wider rotation and shift, random scaling, and brightness
+                 jitter. I added this after the 80-epoch runs showed clear
+                 overfitting: validation accuracy reached 0.9326 while test
+                 accuracy stayed at 0.7360.
 
-      - RandomHorizontalFlip. The brain is roughly symmetric left to right, and
-        these slices are not labelled by side, so a mirrored brain is still a
-        plausible brain. Worth saying honestly: Alzheimer's atrophy is not
-        always perfectly symmetric, so this augmentation does throw away a
-        little real signal. I kept it because the extra variety helps more than
-        the lost asymmetry hurts at this dataset size, but it is a decision I
-        should test rather than assume.
-
-      - RandomAffine with small rotation and shift. Patients are not positioned
-        identically in the scanner, so small rotations and translations are
-        things the model will genuinely meet in new data. I kept the amounts
-        small because a heavily rotated brain slice is not realistic and would
-        just add noise.
-
-    No augmentation on validation or test. Those need to be deterministic, or
-    the same model would score differently on two runs over the same data.
+    The brightness jitter matters most. My brightness_baseline.py experiment
+    showed a mean-intensity rule alone reaches 0.585 on the test split. So
+    average brightness carries real signal, and the model can lean on it.
+    Randomising brightness during training removes that shortcut and forces the
+    model to use shape instead.
     """
     shared_steps = [
         transforms.Grayscale(num_output_channels=1),
         transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
     ]
 
-    if is_training:
+    if not is_training:
+        augmentation_steps = []
+    elif augmentation_strength == "strong":
+        augmentation_steps = [
+            transforms.RandomHorizontalFlip(p=0.5),
+            transforms.RandomAffine(degrees=10, translate=(0.10, 0.10), scale=(0.9, 1.1)),
+            transforms.ColorJitter(brightness=0.25, contrast=0.25),
+        ]
+    else:
         augmentation_steps = [
             transforms.RandomHorizontalFlip(p=0.5),
             transforms.RandomAffine(degrees=5, translate=(0.05, 0.05)),
         ]
-    else:
-        augmentation_steps = []
 
     final_steps = [
-        transforms.ToTensor(),  # also scales pixels from 0-255 down to 0.0-1.0
+        transforms.ToTensor(),
         transforms.Normalize(mean=[PIXEL_MEAN], std=[PIXEL_STD]),
     ]
 
     return transforms.Compose(shared_steps + augmentation_steps + final_steps)
-
 
 class ADNIDataset(Dataset):
     """
@@ -310,6 +306,7 @@ def get_dataloaders(
     validation_fraction=0.15,
     seed=42,
     num_workers=4,
+    augmentation_strength="normal",
 ):
     """
     The one function the training script calls.
@@ -329,7 +326,10 @@ def get_dataloaders(
         seed=seed,
     )
 
-    train_dataset = ADNIDataset(train_samples, build_transforms(is_training=True))
+    train_dataset = ADNIDataset(
+    train_samples,
+    build_transforms(is_training=True, augmentation_strength=augmentation_strength),
+    )
     validation_dataset = ADNIDataset(validation_samples, build_transforms(is_training=False))
     test_dataset = ADNIDataset(test_samples, build_transforms(is_training=False))
 
