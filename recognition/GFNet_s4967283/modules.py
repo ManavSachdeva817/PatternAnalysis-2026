@@ -491,24 +491,23 @@ def count_trainable_parameters(model):
     """
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-
-def build_model(model_name, image_size=224, in_channels=1, num_classes=2):
-    """
-    One place that maps a name to a model, so train.py and predict.py cannot
-    drift apart on how a model is constructed.
-    """
+def build_model(model_name, image_size=224, in_channels=1, num_classes=2, dropout_rate=None):
     if model_name == "baseline":
-        return BaselineCNN(in_channels=in_channels, num_classes=num_classes)
+        return BaselineCNN(
+            in_channels=in_channels,
+            num_classes=num_classes,
+            dropout_rate=0.3 if dropout_rate is None else dropout_rate,
+        )
 
     if model_name == "gfnet":
         return GFNet(
             image_size=image_size,
             in_channels=in_channels,
             num_classes=num_classes,
+            dropout_rate=0.1 if dropout_rate is None else dropout_rate,
         )
 
     raise ValueError("Unknown model name: %s" % model_name)
-
 
 # ===========================================================================
 # Self-tests
