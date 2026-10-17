@@ -36,8 +36,9 @@
 MODEL=${1:-baseline}
 SEED=${2:-42}
 EPOCHS=${3:-30}
-
-OUTPUT_DIR="outputs_${MODEL}_seed${SEED}"
+AUG=${4:-normal}
+DROPOUT=${5:-}
+OUTPUT_DIR="outputs_${MODEL}_seed${SEED}_${AUG}"
 
 # A fresh shell on the compute node does not carry my activated venv.
 source ~/venvs/comp3710/bin/activate
@@ -61,4 +62,6 @@ python train.py \
     --learning-rate 3e-4 \
     --seed "$SEED" \
     --num-workers 8 \
+    --augmentation "$AUG" \
+    --weight-decay 1e-3 \
     --output-dir "$OUTPUT_DIR"
