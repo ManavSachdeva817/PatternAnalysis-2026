@@ -347,15 +347,14 @@ def main():
         batch_size=arguments.batch_size,
         seed=arguments.seed,
         num_workers=arguments.num_workers,
-        num_workers=arguments.num_workers,
         augmentation_strength=arguments.augmentation,
     )
     print("  train batches: %d" % len(train_loader))
     print("  validation batches: %d" % len(validation_loader))
     print("  test batches: %d" % len(test_loader))
-
+    
     # ---- Model ----
-    model = build_model(arguments.model, image_size=IMAGE_SIZE, dropout_rate=arguments.dropout)
+    model = build_model(arguments.model, image_size=IMAGE_SIZE, dropout_rate=arguments.dropout).to(device)
     parameter_count = count_trainable_parameters(model)
     print()
     print("Model: %s with %d trainable parameters" % (arguments.model, parameter_count))
