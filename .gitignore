@@ -113,3 +113,4 @@ adni_subset/
 # ever need a .jpg figure in the README, I force it in with:
 #     git add -f recognition/GFNet_s4967283/figures/my_figure.jpg
 # Better still, save figures as .png so this never comes up.
+outputs/
