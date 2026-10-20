@@ -428,17 +428,37 @@ I fit the temperature on the **validation** split. A fit on test, followed by a
 report of test calibration, would be a tune on the test set. That is the same
 mistake that the patient-level split exists to avoid.
 
-| Model | Temperature | ECE before | ECE after | Accuracy |
+| Model | Temperature | ECE before | ECE after | Change | Accuracy |
+|---|---|---|---|---|---|
+| BaselineCNN | 1.20 | 0.1812 | 0.1651 | −8.9% | unchanged |
+| GFNet | 1.11 | 0.0934 | 0.0787 | −15.7% | unchanged |
+
+A temperature above 1 means the model was overconfident. Both models were, and
+both only mildly. Accuracy did not move for either model, which is the expected
+behaviour and a check that the implementation is correct.
+
+GFNet gains more from the fit than the baseline does, at 15.7% against 8.9%. So
+some of the overconfidence of the baseline is structural, and a single global
+scale does not remove it.
+
+**Strong augmentation did most of the work that temperature scaling would have
+done.** I ran the same fit on the normal-augmentation models earlier in the
+project. The numbers were very different.
+
+| Run | Temperature | ECE before | ECE after | Change |
 |---|---|---|---|---|
-| BaselineCNN (80 ep, normal aug) | 1.36 | 0.2164 | 0.1963 | unchanged |
-| GFNet (80 ep, normal aug) | 1.90 | 0.1819 | 0.1102 | unchanged |
+| GFNet, normal aug | 1.90 | 0.1819 | 0.1102 | −39% |
+| GFNet, strong aug | 1.11 | 0.0934 | 0.0787 | −16% |
+| BaselineCNN, normal aug | 1.36 | 0.2164 | 0.1963 | −9% |
+| BaselineCNN, strong aug | 1.20 | 0.1812 | 0.1651 | −9% |
 
-A temperature above 1 means the model was overconfident. Both models were.
+The fitted temperature for GFNet fell from 1.90 to 1.11. A temperature near 1
+means there is little global overconfidence left to remove. Augmentation and
+temperature scaling treat the same problem. Augmentation treats it better,
+because it also raises accuracy, and temperature scaling cannot.
 
-**The miscalibration of GFNet is fixable. The miscalibration of the baseline is
-not.** One number cuts the calibration error of GFNet by 39%. The same method
-cuts the error of the baseline by only 9%. So the overconfidence of the baseline
-is structural, and not a simple global scale problem.
+So the order matters. Fix the training first, then scale the temperature on
+what is left.
 
 ### Patient-level evaluation
 
@@ -600,8 +620,9 @@ either model.
    saves 673 missed AD cases at no cost in overall accuracy. A missed case is
    the expensive error in screening.
 3. **Apply temperature scaling, fitted on validation.** It costs one parameter,
-   it changes no prediction, and it makes the reported confidence more honest.
-   It helps GFNet far more than the baseline.
+   it changes no prediction, and it cuts the calibration error by 9% to 16%.
+   Apply strong augmentation first. Augmentation removes most of the
+   overconfidence that temperature scaling would otherwise remove.
 4. **Treat every output as a draft for a specialist.** A confidence separation
    of 0.058 means the system cannot find its own unsure cases reliably.
 
