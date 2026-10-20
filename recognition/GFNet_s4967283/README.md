@@ -1,7 +1,12 @@
 # GFNet for Alzheimer's Classification on ADNI Brain MRI
 
-**Manav Sachdeva (s4967283).** COMP3710 Pattern Analysis Project.
-Project 2.1 Classification. Model: GFNet. Difficulty: Hard.
+**Manav Sachdeva (s4967283).**											
+
+**COMP3710 Pattern Analysis Project.**
+
+**Project 2.1 Classification.**
+
+**Model: GFNet. Difficulty: Hard.**
 
 ---
 
