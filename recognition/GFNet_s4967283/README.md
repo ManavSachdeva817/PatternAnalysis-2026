@@ -144,7 +144,10 @@ not a weak target.
 | `visualise_data.py` | Four figures of the raw data, plus a leakage measurement |
 | `brightness_baseline.py` | A one-feature classifier, used to audit the result |
 | `evaluate_calibration.py` | ECE, reliability, reject-option sweep, temperature scaling |
-| `run_smoke.sh`, `run_train.sh` | SLURM scripts for Rangpur |
+| `inspect_patient.py` | Per-slice predictions for one patient, used for the error autopsy |
+| `run_smoke.sh` | SLURM smoke test, two epochs, run before any full job |
+| `run_train.sh` | SLURM training run. Takes model, seed, epochs and augmentation |
+| `run_figures.sh` | SLURM job that rebuilds every figure from a pair of checkpoints |
 
 ---
 
