@@ -491,7 +491,22 @@ def count_trainable_parameters(model):
     """
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
-def build_model(model_name, image_size=224, in_channels=1, num_classes=2, dropout_rate=None):
+def build_model(model_name, image_size=224, in_channels=1, num_classes=2,
+                dropout_rate=None, patch_size=16):
+    """
+    One place that maps a name to a model, so train.py and predict.py cannot
+    drift apart on how a model is constructed.
+
+    patch_size only affects GFNet. It sets how finely the image is cut into
+    tokens, and through that, how many frequency components the global filter
+    has to work with:
+
+        patch 16 -> 14 x 14 tokens -> rfft2 gives 14 x 8  -> 112 components
+        patch  8 -> 28 x 28 tokens -> rfft2 gives 28 x 15 -> 420 components
+
+    Alzheimer's atrophy is subtle and spatially local, so 112 components may be
+    too coarse an instrument for it. BaselineCNN ignores this argument.
+    """
     if model_name == "baseline":
         return BaselineCNN(
             in_channels=in_channels,
@@ -502,6 +517,7 @@ def build_model(model_name, image_size=224, in_channels=1, num_classes=2, dropou
     if model_name == "gfnet":
         return GFNet(
             image_size=image_size,
+            patch_size=patch_size,
             in_channels=in_channels,
             num_classes=num_classes,
             dropout_rate=0.1 if dropout_rate is None else dropout_rate,

@@ -377,6 +377,10 @@ def parse_arguments():
                              "train/validation split will differ.")
     parser.add_argument("--no-figures", action="store_true",
                         help="Skip the figures and only write the predictions file.")
+    parser.add_argument("--patch-size", type=int, default=16,
+                        help="Must match the patch size used for training, or "
+                             "the checkpoint will not load. Ignored by the "
+                             "baseline.")
     return parser.parse_args()
 
 
@@ -403,7 +407,10 @@ def main():
 
     print()
     print("Loading %s from %s" % (arguments.model, arguments.checkpoint))
-    model = build_model(arguments.model).to(device)
+    model = build_model(
+        arguments.model,
+        patch_size=arguments.patch_size,
+    ).to(device)
     model.load_state_dict(torch.load(arguments.checkpoint, map_location=device))
     print("  %d trainable parameters" % count_trainable_parameters(model))
 

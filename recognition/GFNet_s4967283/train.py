@@ -328,6 +328,11 @@ def parse_arguments():
                         help="Training augmentation strength.")
     parser.add_argument("--dropout", type=float, default=None,
                         help="Override the model's default dropout rate.")
+    parser.add_argument("--patch-size", type=int, default=16,
+                        help="GFNet patch size. 16 gives a 14x14 token grid "
+                             "and 112 frequency components. 8 gives 28x28 and "
+                             "420, at about four times the compute. Ignored by "
+                             "the baseline.")
     return parser.parse_args()
 
 
@@ -354,7 +359,12 @@ def main():
     print("  test batches: %d" % len(test_loader))
     
     # ---- Model ----
-    model = build_model(arguments.model, image_size=IMAGE_SIZE, dropout_rate=arguments.dropout).to(device)
+    model = build_model(
+        arguments.model,
+        image_size=IMAGE_SIZE,
+        dropout_rate=arguments.dropout,
+        patch_size=arguments.patch_size,
+    ).to(device)
     parameter_count = count_trainable_parameters(model)
     print()
     print("Model: %s with %d trainable parameters" % (arguments.model, parameter_count))

@@ -5,6 +5,9 @@
 #   sbatch run_train.sh baseline 42
 #   sbatch run_train.sh gfnet 42
 #
+# Arguments: MODEL SEED EPOCHS AUG PATCH
+#   sbatch run_train.sh gfnet 42 80 normal 8     patch size 8, finer tokens
+#
 # For the three-seed comparison later:
 #   for s in 42 1 2; do sbatch run_train.sh baseline $s; done
 #   for s in 42 1 2; do sbatch run_train.sh gfnet $s; done
@@ -37,8 +40,19 @@ MODEL=${1:-baseline}
 SEED=${2:-42}
 EPOCHS=${3:-30}
 AUG=${4:-normal}
-DROPOUT=${5:-}
-OUTPUT_DIR="outputs_${MODEL}_seed${SEED}_${AUG}"
+PATCH=${5:-16}
+
+# Patch size only affects GFNet. 16 gives a 14x14 token grid, which rfft2 turns
+# into 14x8, so 112 frequency components. 8 gives 28x28 and therefore 28x15,
+# which is 420 components, at roughly four times the compute per epoch.
+#
+# Runs at the default patch size keep the old folder names, so nothing that
+# already exists is overwritten. Anything else gets a _p<size> suffix.
+if [ "$PATCH" = "16" ]; then
+    OUTPUT_DIR="outputs_${MODEL}_seed${SEED}_${AUG}"
+else
+    OUTPUT_DIR="outputs_${MODEL}_seed${SEED}_${AUG}_p${PATCH}"
+fi
 
 # A fresh shell on the compute node does not carry my activated venv.
 source ~/venvs/comp3710/bin/activate
@@ -47,7 +61,7 @@ echo "=== environment check ==="
 which python
 python -c "import torch; print('torch', torch.__version__, 'cuda:', torch.cuda.is_available())"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-echo "model=$MODEL seed=$SEED epochs=$EPOCHS output=$OUTPUT_DIR"
+echo "model=$MODEL seed=$SEED epochs=$EPOCHS aug=$AUG patch=$PATCH output=$OUTPUT_DIR"
 echo "========================="
 echo
 
@@ -64,4 +78,5 @@ python train.py \
     --num-workers 8 \
     --augmentation "$AUG" \
     --weight-decay 1e-3 \
+    --patch-size "$PATCH" \
     --output-dir "$OUTPUT_DIR"
