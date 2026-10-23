@@ -134,6 +134,53 @@ not a weak target.
 
 ## Repository contents
 
+```
+PatternAnalysis-2026/
+└── recognition/
+    └── GFNet_s4967283/
+        ├── README.md                 This report
+        ├── progress_log.md           Dated record of each working day
+        │
+        ├── modules.py                GFNet and BaselineCNN, plus six self-tests
+        ├── dataset.py                Patient-level splits, augmentation, loaders
+        ├── train.py                  Training loop, validation, checkpoints
+        ├── predict.py                Inference, confusion matrix, report figures
+        │
+        ├── audit_adni.py             Dataset audit, written before the loader
+        ├── visualise_data.py         Raw data figures and a leakage measurement
+        ├── brightness_baseline.py    One-feature classifier, audits for an artifact
+        ├── evaluate_calibration.py   ECE, reliability, reject option, temperature
+        ├── inspect_patient.py        Per-slice predictions for a named patient
+        ├── try_ensemble.py           Combines the two models and measures the gain
+        ├── audit_split_difference.py Compares the shipped train and test folders
+        ├── find_duplicate_subjects.py Finds repeat scans of one person across splits
+        ├── measure_leakage_impact.py Counts the leaked patients and scores without them
+        │
+        ├── run_smoke.sh              SLURM, two epochs, run before any full job
+        ├── run_train.sh              SLURM, full run. Args: model seed epochs aug
+        ├── run_figures.sh            SLURM, rebuilds every figure from checkpoints
+        │
+        └── figures/
+            ├── fig1_class_comparison.png        Example slices, AD against NC
+            ├── fig2_one_patient_all_slices.png  All 20 slices of one patient
+            ├── fig3_class_averages.png          Mean image per class
+            ├── fig4_intensity_histograms.png    Pixel intensity by class
+            ├── predictions_baseline.png         Example predictions
+            ├── predictions_gfnet.png
+            ├── failures_baseline.png            Most confident mistakes
+            ├── failures_gfnet.png
+            ├── filters_gfnet.png                Learned frequency filters
+            ├── calibration_reliability.png      Reliability diagram
+            ├── calibration_confidence.png       Confidence, right against wrong
+            ├── reject_option_curves.png         Retained accuracy by referral rate
+            ├── calibration_results.json         Every calibration number
+            ├── test_predictions_*.npz           Saved test probabilities
+            └── validation_predictions_*.npz     Saved validation probabilities
+```
+
+Model checkpoints and training logs are not committed. The spec forbids it and
+they are regenerable from `run_train.sh`.
+
 | File | Purpose |
 |------|---------|
 | `modules.py` | `BaselineCNN` and `GFNet` definitions, plus six self-tests |
@@ -145,6 +192,10 @@ not a weak target.
 | `brightness_baseline.py` | A one-feature classifier, used to audit the result |
 | `evaluate_calibration.py` | ECE, reliability, reject-option sweep, temperature scaling |
 | `inspect_patient.py` | Per-slice predictions for one patient, used for the error autopsy |
+| `try_ensemble.py` | Combines the two models and measures what that buys |
+| `audit_split_difference.py` | Compares the shipped folders on eight measures, with effect sizes |
+| `find_duplicate_subjects.py` | Detects repeat scans of one person, using test as a control |
+| `measure_leakage_impact.py` | Counts leaked patients and recomputes accuracy without them |
 | `run_smoke.sh` | SLURM smoke test, two epochs, run before any full job |
 | `run_train.sh` | SLURM training run. Takes model, seed, epochs and augmentation |
 | `run_figures.sh` | SLURM job that rebuilds every figure from a pair of checkpoints |
@@ -250,11 +301,15 @@ and validation. The model could then score well because it recognises the
 patient and not the disease. Validation accuracy would look excellent for the
 wrong reason, and the test score would then collapse with no clear cause.
 
-So every split happens at **patient** level. I choose which patients go where
-first, and all 20 slices of a patient follow that choice.
-`check_no_patient_overlap` raises an `AssertionError` if a patient appears in two
-splits. It crashes and does not warn, because if that check fires, every number
-after it is worthless.
+So every split happens at **ID** level. I choose which IDs go where first, and
+all 20 slices of an ID follow that choice. `check_no_patient_overlap` raises an
+`AssertionError` if an ID appears in two splits. It crashes and does not warn,
+because if that check fires, every number after it is worthless.
+
+**That is correct, and it is not enough.** The section "The filename ID is a
+scan ID, not a person ID" below shows that one person holds several consecutive
+IDs, so this check passes while the same person sits in two splits. I measured
+how much that costs and report the corrected numbers there.
 
 | Split | Images | Patients | NC | AD |
 |-------|--------|----------|-----|-----|
@@ -760,6 +815,232 @@ between these two architectures.
 
 ---
 
+## The filename ID is a scan ID, not a person ID
+
+This is the most important methodological finding in the project, and it was
+found by pulling on a number that looked wrong.
+
+### Why I went looking
+
+Both models lose heavily between validation and test:
+
+| Model | Validation | Test | Drop |
+|---|---|---|---|
+| BaselineCNN | 0.9028 | 0.7421 | 16 points |
+| GFNet | 0.7907 | 0.6837 | 11 points |
+
+Both splits are patient-disjoint by ID. A 16-point drop between two clean
+splits of one dataset is too large to accept without an explanation.
+
+### Step 1. The two shipped folders are indistinguishable
+
+`audit_split_difference.py` compares the shipped `train/` and `test/` folders on
+eight measures and reports Cohen's d for each.
+
+| Measure | train | test | Cohen's d | Size |
+|---|---|---|---|---|
+| Tissue mean intensity | 113.62 | 113.85 | −0.014 | negligible |
+| Tissue standard deviation | 54.03 | 53.85 | 0.028 | negligible |
+| Tissue 99th percentile | 212.79 | 212.89 | −0.005 | negligible |
+| Head area fraction | 0.258 | 0.263 | −0.215 | small |
+| Bounding box width | 148.84 | 150.78 | −0.221 | small |
+| Bounding box height | 169.28 | 170.35 | −0.107 | negligible |
+| Centroid row | 102.59 | 101.95 | 0.084 | negligible |
+| Centroid column | 142.13 | 141.26 | 0.075 | negligible |
+
+Slice numbering: train covers 70 to 114, test covers 75 to 114. Test is a
+subset, so the models train on five slice positions that never appear at test
+time. That runs in the favourable direction.
+
+Patients in both shipped folders, by ID: zero.
+
+So the folders do not differ in any way a pixel measure can reach, and a whole
+class of explanation is closed.
+
+### Step 2. The same person holds several IDs
+
+ADNI follows people for years and scans them repeatedly. If one person's
+sessions were filed under different IDs, a validation patient could be the same
+person as a training patient, and the ID check would pass regardless.
+
+`find_duplicate_subjects.py` reduces each patient to one 48 × 48 mean image,
+normalises it, and finds the closest training patient for every validation and
+test patient by correlation. Test acts as the control, because a high
+correlation means nothing on its own when all brain MRIs resemble each other.
+
+The closest pairs settled it:
+
+| Validation patient | Closest training patient | Correlation | ID gap |
+|---|---|---|---|
+| 1037251 | 1037250 | 1.0000 | 1 |
+| 1029553 | 1029554 | 1.0000 | 1 |
+| 1142366 | 1142367 | 1.0000 | 1 |
+| 982444 | 982443 | 0.9999 | 1 |
+| 1069428 | 1069430 | 1.0000 | 2 |
+
+`measure_leakage_impact.py` then separated the pairs by correlation and
+compared their ID gaps.
+
+| Group | n | Median ID gap | Within 20 of each other |
+|---|---|---|---|
+| Validation, correlation ≥ 0.995 | 26 | **2** | 26 of 26 |
+| Validation, correlation < 0.995 | 135 | 47,026 | 31 of 135 |
+| Test, correlation ≥ 0.995 | 4 | **1** | 3 of 4 |
+| Test, correlation < 0.995 | 446 | 334,840 | **0 of 446** |
+
+Four orders of magnitude separate the two groups. Every near-duplicate sits
+within 20 IDs of its match. Not one of the 446 ordinary test patients does.
+
+**The filename ID identifies a scan, not a person.** IDs are allocated in
+sequence, so one person's repeat scans land next to each other.
+
+**16.1% of the validation patients share a person with the training set.** In
+test it is 0.9%, which is consistent with the folders being separate cohorts
+that a few people straddle.
+
+### Step 3. How much it cost
+
+Patient-level accuracy with every leaked patient removed:
+
+| Model | Split | All patients | Leaked removed | Change |
+|---|---|---|---|---|
+| BaselineCNN | validation | 0.9317 | 0.9259 | −0.6 pts |
+| BaselineCNN | test | 0.7511 | 0.7489 | −0.2 pts |
+| GFNet | validation | 0.8199 | 0.8148 | −0.5 pts |
+| GFNet | test | 0.7444 | 0.7422 | −0.2 pts |
+
+**The leakage is real and its effect is small.** About half a point of
+validation accuracy. It does not explain a 16-point gap.
+
+The reason is visible in the per-group scores. On the 26 leaked validation
+patients the baseline reaches 0.9615 against 0.9259 on the rest, which is only
+3.6 points better. A memorised patient would score near 1.00. The model has
+seen the same person before, that helps a little, and that is the whole effect.
+
+One observation I will not lean on: both models score 1.0000 on the four leaked
+test patients, against a base rate near 0.74. Two architectures, four for four.
+Suggestive, but four patients is not evidence.
+
+### What this changes in the report
+
+Every accuracy in this report is computed over all patients, because that is
+what a marker reproducing the run would get. The corrected figures above differ
+by 0.2 to 0.6 points and change no conclusion.
+
+What it does change is the claim. **These splits are leak-free by ID and are
+not leak-free by subject.** The earlier sections say the splitting is correct,
+and it is correct given the only identifier the filenames offer. It is not
+sufficient, and I would not have known that without checking.
+
+### What I would do with more time
+
+Group IDs into subjects by image correlation, then split by subject rather than
+by ID. The grouping rule falls straight out of the measurement: correlation at
+or above 0.995 together with an ID gap under 20. That would make the splits
+genuinely leak-free.
+
+I expect it would lower validation by roughly half a point and leave test
+almost unchanged, since test is 99.1% clean. It would not improve accuracy. It
+would make the headline number honest, which is the better reason to do it.
+
+### The gap is still unexplained
+
+Folder statistics: ruled out. Subject leakage: measured and too small. What
+remains is that the test cohort is genuinely harder than the training cohort,
+or that the two differ in something no pixel measure reaches, such as scanner
+model, field strength or acquisition site. ADNI does not ship that metadata
+with these JPEGs, so I cannot test it here.
+
+I am recording the gap as open rather than attributing it to a cause I have not
+demonstrated.
+
+---
+
+## Experiments towards the 0.80 minimum
+
+The project specification sets a minimum of 0.80 test accuracy for GFNet on
+AD against CN. This section records every experiment run towards that number,
+including the ones that failed, so the effort behind the result is visible
+rather than scattered through the report.
+
+**Best achieved: 0.7122 at slice level and 0.7444 at patient level.** The
+target was not reached.
+
+### The ledger
+
+| # | Experiment | Hypothesis | Result | Verdict |
+|---|---|---|---|---|
+| 1 | GFNet, 30 epochs, normal augmentation | Establish a starting point | 0.6890 | baseline for the rest |
+| 2 | GFNet, 80 epochs, normal augmentation | More training helps | 0.7106 | **+2.2 pts** |
+| 3 | GFNet, 80 epochs, strong augmentation, weight decay 1e-3 | Less overfitting helps | 0.7122 | +0.2 pts, no real gain |
+| 4 | GFNet, 150 epochs, normal augmentation | The model is underfitting and needs longer | 0.6837 | **−2.7 pts. Hypothesis wrong** |
+| 5 | Patient-level aggregation of the 20 slices | Errors are scattered across slices | 0.7444 | **+3.2 pts** |
+| 6 | Temperature scaling, fitted on validation | Fixes confidence, not accuracy | accuracy unchanged | as predicted, confirms the method |
+| 7 | Decision threshold sweep, 0.10 to 0.60 | A better operating point exists | accuracy flat near 0.73 | moves errors between classes, adds no accuracy |
+| 8 | Even ensemble with BaselineCNN | The two models fail on different patients | 0.7600 patient level | +0.9 pts, but not GFNet, and costs 14 more total failures |
+| 9 | Mean-brightness-only control classifier | Check for a dataset artifact | 0.585 | the network learns real structure |
+| 10 | Patch size 8 instead of 16 | Frequency resolution is the constraint | [PENDING] | [PENDING] |
+| 11 | 2.5D input, three adjacent slices as channels | One slice lacks depth context | [PENDING] | [PENDING] |
+| 12 | Audit of the shipped train and test folders | Something systematic separates them | all 8 measures negligible or small | **ruled out** |
+| 13 | Subject-identity check by image correlation, test as control | The same person holds several IDs | duplicates at median ID gap 2, others at 47,026 | **confirmed. IDs are scan IDs** |
+| 14 | Accuracy recomputed with leaked patients removed | The leak explains the validation-to-test gap | validation −0.6 pts, test −0.2 pts | **too small. Gap still open** |
+
+### Experiment 4 in detail, because it failed informatively
+
+I read GFNet's small validation-to-test gap as underfitting and ran it for 150
+epochs with lighter augmentation. Test accuracy fell by 2.7 points.
+
+The diagnosis was wrong, and the number that disproves it was already in the
+logs. GFNet reaches a training accuracy of 0.8843 against a validation accuracy
+of 0.7714. An 11-point train-to-validation gap is overfitting, not
+underfitting. I had compared GFNet's validation-to-test gap against the
+baseline's instead of looking at its training accuracy.
+
+The run also showed that GFNet converges at epoch 60 and then decays.
+Validation peaked at 0.7907 at epoch 60 and fell to 0.7714 for the remaining 90
+epochs. Three separate runs now peak between epoch 54 and epoch 61.
+
+One methodological note. The learning rate schedule is tied to the epoch count,
+so epoch 60 of a 150-epoch schedule is at a different learning rate than epoch
+60 of an 80-epoch schedule. Run 4 is therefore not "run 2 but longer", it is a
+different trajectory. A clean test of training length would hold the schedule
+fixed and stop early.
+
+### What the ledger shows
+
+**Nothing in the training loop moves GFNet.** Four runs across three schedules
+and two augmentation settings all land between 0.684 and 0.712. Learning rate,
+epoch count, augmentation strength and weight decay have been varied. The
+plateau holds.
+
+That points the remaining effort at the architecture and at the input
+representation, which is where experiments 10 and 11 go, rather than at further
+tuning.
+
+### The unexplained gap
+
+Both models lose heavily between validation and test, and this is the largest
+unexplained effect in the project.
+
+| Model | Validation | Test | Drop |
+|---|---|---|---|
+| BaselineCNN | 0.9028 | 0.7421 | 16 points |
+| GFNet | 0.7907 | 0.6837 | 11 points |
+
+Both splits are patient-disjoint. Validation is drawn from the shipped `train/`
+folder and test is the shipped `test/` folder, used exactly as distributed.
+
+Closing even half of that gap would put GFNet near the target, which makes it a
+better target for effort than further tuning. `audit_split_difference.py`
+compares the two folders on slice numbering, patient ID ranges, head area and
+position in the frame, tissue contrast and intensity percentiles, and reports
+an effect size for each.
+
+Pixel intensity histograms were checked earlier and matched, which rules out
+brightness as the cause but not the rest.
+
+---
+
 ## Limitations
 
 **The project did not meet the 0.8 accuracy target.** The best result is 0.7421
@@ -788,6 +1069,17 @@ add.
 
 **The horizontal flip** assumes a left-right symmetry that Alzheimer's atrophy
 does not always keep. It deserves an ablation.
+
+**The splits are leak-free by ID and not by subject.** 16.1% of validation
+patients share a person with the training set, because the filename ID
+identifies a scan rather than a person. Measured cost: 0.6 points of validation
+accuracy and 0.2 points of test accuracy. The section above sets out the
+evidence and the fix I would apply with more time.
+
+**The validation-to-test gap of 16 points is unexplained.** Folder statistics
+and subject leakage were both tested and neither accounts for it. I am
+recording it as open rather than attributing it to a cause I cannot
+demonstrate.
 
 ---
 
