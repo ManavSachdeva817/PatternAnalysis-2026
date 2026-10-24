@@ -237,35 +237,388 @@ bit-exact. `deterministic=True` would fix that, at a clear cost in speed.
 
 ## How to run
 
+Every command below shows the output you should expect. The output is real and
+abridged, with `...` where lines are cut. If what you see differs, something is
+wrong and the note under each block says what to check.
+
+Run the whole pipeline in this order. Each step depends on the one before it.
+
+### 1. Audit the dataset
+
 ```bash
-# Inspect the dataset
 python audit_adni.py
+```
 
-# Produce the data figures
-python visualise_data.py --data-root /home/groups/comp3710/ADNI/AD_NC --output-dir figures
+Prints the folder layout, the image count per class, the image size and the
+pixel range, and confirms that the shipped train and test folders share no
+patient IDs. Run it first. Every later step assumes the layout it reports.
 
-# Check the models before you spend GPU time
+### 2. Check the splits and the loader
+
+```bash
+python dataset.py
+```
+
+Expected output:
+
+```
+Building splits...
+
+SPLIT SUMMARY
+train         18300 images    915 patients   NC: 9460   AD: 8840
+validation     3220 images    161 patients   NC: 1660   AD: 1560
+test           9000 images    450 patients   NC: 4540   AD: 4460
+
+No patient appears in two splits (the assertion in build_splits passed).
+
+Loading one batch to check shapes...
+  image batch shape: (8, 1, 224, 224)
+  label batch shape: (8,)
+  pixel range after normalising: -0.518 to 3.779
+```
+
+**Check:** the patient counts must read 915, 161 and 450, and the assertion
+line must appear. If `build_splits` raises an `AssertionError` instead, a
+patient is in two splits and nothing after this is worth running.
+
+### 3. Check the models before spending GPU time
+
+```bash
 python modules.py
+```
 
-# Train (SLURM). Arguments: model, seed, epochs, augmentation
+Expected output:
+
+```
+GFNet and baseline self-tests
+
+test: filter with unit weights returns its input unchanged
+   largest absolute difference: 4.768e-07
+   passed
+
+test: filter shapes
+   grid  7x7  -> rfft width 4, weight (7, 4, 4, 2)  OK
+   grid 14x14 -> rfft width 8, weight (14, 8, 4, 2)  OK
+   grid 16x16 -> rfft width 9, weight (16, 9, 4, 2)  OK
+   passed
+
+...
+
+test: model output shapes and parameter counts
+   BaselineCNN  output (4, 2)   parameters    421474
+   GFNet        output (4, 2)   parameters   4788482
+   GFNet is 11.4x the size of the baseline
+   passed
+
+all checks passed
+```
+
+**Check:** the first test is the important one. It sets every filter weight to
+1 + 0i, so the block does FFT, multiply by one, inverse FFT, and must return
+its input unchanged. A difference above 1e-4 means the transform plumbing is
+wrong and no amount of training will fix it.
+
+This runs on CPU in a few seconds. On the login node it prints a CUDA driver
+warning, which is expected there and harmless.
+
+### 4. Train
+
+```bash
+# Arguments: model seed epochs augmentation patch slices
 sbatch run_train.sh baseline 42 80 strong
 sbatch run_train.sh gfnet 42 80 strong
 
-# Run a trained model and draw the figures
-python predict.py --model gfnet --checkpoint outputs_gfnet_seed42_strong/best_gfnet.pt --output-dir figures
+# Patch size 8 gives a 28x28 token grid instead of 14x14
+sbatch run_train.sh gfnet 42 80 normal 8
 
-# Produce the validation predictions that temperature scaling needs
-python predict.py --model gfnet --checkpoint outputs_gfnet_seed42_strong/best_gfnet.pt --split validation --no-figures --output-dir figures
+# 2.5D: the slice plus its two neighbours, stacked as three channels
+sbatch run_train.sh gfnet 42 80 normal 16 3
+```
 
-# The dilemma investigation
+Expected output from `sbatch`:
+
+```
+Submitted batch job 692552
+```
+
+Then watch it:
+
+```bash
+squeue -u $USER
+```
+
+While the job runs, the log fills with one line per epoch:
+
+```
+epoch 148/150  train loss 0.2617 acc 0.8879  |  val loss 0.5767 acc 0.7724  |  13.6s
+epoch 149/150  train loss 0.2649 acc 0.8862  |  val loss 0.5776 acc 0.7720  |  14.0s
+epoch 150/150  train loss 0.2730 acc 0.8843  |  val loss 0.5779 acc 0.7714  |  13.7s
+------------------------------------------------------------------------
+Training finished in 35.2 minutes
+Best validation accuracy 0.7907 at epoch 60
+
+Loading best checkpoint and evaluating on the test set
+
+TEST RESULTS
+  accuracy: 0.6837
+  macro F1: 0.6777
+  NC: precision 0.6488  recall 0.8128  f1 0.7216
+  AD: precision 0.7434  recall 0.5522  f1 0.6337
+
+RESOURCE PROFILE
+  trainable parameters: 4788482
+  peak GPU memory: 1.58 GB
+  total training time: 35.2 minutes
+  mean seconds per epoch: 14.0
+  inference: 5589 images/second (0.179 ms per image)
+
+Wrote:
+  outputs_gfnet_seed42_normal/best_gfnet.pt
+  outputs_gfnet_seed42_normal/history_gfnet.json
+  outputs_gfnet_seed42_normal/test_predictions_gfnet.npz
+  outputs_gfnet_seed42_normal/summary_gfnet.json
+```
+
+**Check:** seconds per epoch tells you the job is healthy. Expect about 14 for
+either model at patch 16, about 42 at patch 8, and about 40 with three slice
+channels. A figure far above those means the data loader is starving the GPU.
+
+The output folder is named from the arguments. Patch 16 with one slice keeps
+the plain name, and anything else gets a `_p<size>` or `_s<slices>` suffix, so
+runs never overwrite each other.
+
+### 5. Run a trained model and draw the figures
+
+```bash
+python predict.py --model gfnet \
+  --checkpoint outputs_gfnet_seed42_strong/best_gfnet.pt --output-dir figures
+```
+
+Expected output:
+
+```
+Using GPU: NVIDIA A100-PCIE-40GB
+
+Loading data from /home/groups/comp3710/ADNI/AD_NC
+Running on the test split: 141 batches
+
+Loading gfnet from outputs_gfnet_seed42_strong/best_gfnet.pt
+  4788482 trainable parameters
+
+RESULTS
+  slices: 9000
+  accuracy: 0.7122
+
+  confusion matrix
+                 predicted NC   predicted AD
+  actual NC            3814            726
+  actual AD            1864           2596
+
+  NC: precision 0.6717  recall 0.8401  (missed 726)
+  AD: precision 0.7815  recall 0.5821  (missed 1864)
+
+  patient level: 0.7444  (335 of 450 patients)
+
+  FAILURE CASES FOR THE AUTOPSY
+  Most confident false negatives (has AD, called normal):
+    patient 985197  confidence 0.9990
+    ...
+```
+
+**Check:** the confusion matrix rows must sum to 4,540 and 4,460. If they do
+not, the loader returned the wrong split.
+
+Add `--patch-size 8` or `--slice-context 3` when the checkpoint was trained
+that way. A mismatch fails loudly when the weights do not fit the model, which
+is the behaviour you want.
+
+### 6. Validation predictions for temperature scaling
+
+```bash
+python predict.py --model gfnet \
+  --checkpoint outputs_gfnet_seed42_strong/best_gfnet.pt \
+  --split validation --no-figures --output-dir figures
+```
+
+Expected output ends with:
+
+```
+  patient level: 0.8199  (132 of 161 patients)
+
+  wrote figures/validation_predictions_gfnet.npz
+```
+
+**Check:** 161 patients, not 450. The temperature must be fitted on validation.
+Fitting it on test and then reporting test calibration would be tuning on the
+test set.
+
+### 7. The dilemma investigation
+
+```bash
 python evaluate_calibration.py \
   --predictions figures/test_predictions_baseline.npz figures/test_predictions_gfnet.npz \
   --val-predictions figures/validation_predictions_baseline.npz figures/validation_predictions_gfnet.npz \
   --names baseline gfnet --output-dir figures
 ```
 
-`predict.py` and `train.py` need a GPU. Run them through SLURM. Do not run them
-on the login node.
+Expected output, per model:
+
+```
+MODEL: gfnet
+Slice level:   9000 slices, accuracy 0.7122
+Patient level: 450 patients, accuracy 0.7444  (20-20 slices each)
+
+Calibration:
+  expected calibration error: 0.0934
+  worst single bin gap:       0.1594
+  mean confidence when right: 0.8281
+  mean confidence when wrong: 0.7499
+  separation:                 0.0782
+
+Temperature scaling (fitted on validation):
+  temperature: 1.11 (>1 means it was overconfident)
+  ECE 0.0934 -> 0.0787
+  accuracy 0.7122 -> 0.7122 (should be unchanged)
+
+Recommended operating point:
+  NOT ACHIEVABLE. No threshold reaches 0.95 accuracy on automated cases
+  while referring no more than 30% of cases.
+```
+
+**Check:** accuracy before and after temperature scaling must be identical.
+Temperature scaling divides the logits by one number, which cannot reorder
+them. If accuracy moves, the implementation is wrong.
+
+### Rebuild every figure at once
+
+```bash
+sbatch run_figures.sh
+```
+
+Runs steps 5, 6 and 7 for both models inside one GPU allocation. Use it after
+a new pair of checkpoints, so that the figures and the tables beside them
+always agree.
+
+---
+
+## Analysis scripts
+
+These read the saved `.npz` files or the images directly. None needs a GPU, so
+the login node is fine.
+
+### The brightness control
+
+```bash
+python brightness_baseline.py --data-root /home/groups/comp3710/ADNI/AD_NC
+```
+
+Expected output ends with:
+
+```
+APPLIED TO THE TEST SPLIT
+  slice-level accuracy:   0.5850
+```
+
+**Check:** this is a deliberately stupid classifier that uses one number per
+slice. A result near 0.5 would mean brightness carries no signal. A result near
+0.72 would mean the CNN is close to a brightness meter. At 0.585 it sits
+between, so the network learns real structure and part of the signal is
+brightness.
+
+### Per-slice predictions for one patient
+
+```bash
+python inspect_patient.py --patient 985197 --worst 10
+```
+
+Expected output:
+
+```
+PATIENT 985197
+------------------------------------------------------------------------
+  baseline  true class AD   correct on 0 of 20 slices
+             mean P(AD) 0.0000   min 0.0000   max 0.0000
+  gfnet     true class AD   correct on 0 of 20 slices
+             mean P(AD) 0.0086   min 0.0010   max 0.0290
+```
+
+**Check:** this is the single most important measurement in the error autopsy.
+The baseline returns a probability below 0.00005 on all 20 slices of a patient
+who has Alzheimer's.
+
+### The ensemble
+
+```bash
+python try_ensemble.py
+```
+
+Expected output ends with:
+
+```
+THE EVEN SPLIT, WHICH NEEDS NO FITTING
+  slice accuracy:   0.7494
+  patient accuracy: 0.7600  (450 patients)
+  patients wrong on all 20 slices: 42
+```
+
+**Check:** the script sweeps the mixing weight and then warns you not to report
+the best one, because that weight was chosen by looking at the test split. The
+even split needs no fitting, so that is the number the report uses.
+
+### Compare the two shipped folders
+
+```bash
+python audit_split_difference.py
+```
+
+Expected output ends with:
+
+```
+IMAGE MEASURES, TRAIN AGAINST TEST
+  measure                train mean   test mean    Cohen d   size
+  --------------------------------------------------------------------
+  tissue_mean            113.621      113.853      -0.014    negligible
+  head_area_fraction     0.258        0.263        -0.215    small
+  ...
+```
+
+**Check:** every measure should read negligible or small. Anything marked
+LARGE would be a candidate explanation for the validation-to-test gap.
+
+### Detect repeat scans of one person
+
+```bash
+python find_duplicate_subjects.py
+python measure_leakage_impact.py
+```
+
+Expected output from the second:
+
+```
+ID DIFFERENCE FOR HIGH-CORRELATION PAIRS
+  validation
+    correlation >= 0.995 (n=26): median ID gap 2, 26 of them within 20
+    correlation <  0.995 (n=135): median ID gap 47026, 31 of them within 20
+```
+
+**Check:** the gap between those two median values is the evidence that the
+filename ID identifies a scan and not a person. See the section on that finding
+below.
+
+---
+
+## Where to run what
+
+| Needs a GPU, so use SLURM | Login node is fine |
+|---|---|
+| `train.py`, through `run_train.sh` | `modules.py`, `dataset.py`, `audit_adni.py` |
+| `predict.py`, through `run_figures.sh` | `brightness_baseline.py`, `inspect_patient.py` |
+| | `try_ensemble.py`, `evaluate_calibration.py` |
+| | `audit_split_difference.py` and the two leakage scripts |
+
+The rule I keep: a GPU, any `num_workers` above zero, or anything over a few
+minutes goes to SLURM. I broke it once and ran `predict.py` on the login node
+with four worker processes on a shared machine.
 
 ---
 
