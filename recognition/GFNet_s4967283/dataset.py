@@ -83,6 +83,21 @@ def get_patient_id_from_filename(file_name):
     return file_name.split("_")[0]
 
 
+def slice_number_from_filename(file_name):
+    """
+    Return the slice number from a name like 1003730_100.jpeg, or None.
+
+    The number after the underscore is the slice position within that
+    patient's 3D scan. The number before it is the ID.
+    """
+    base = os.path.basename(file_name)
+    stem = os.path.splitext(base)[0]
+    if "_" not in stem:
+        return None
+    tail = stem.rsplit("_", 1)[1]
+    return int(tail) if tail.isdigit() else None
+
+
 def scan_class_folder(folder_path, label):
     """
     Look at one folder (for example train/AD) and return a list of
@@ -227,7 +242,7 @@ def check_no_patient_overlap(train_samples, validation_samples, test_samples):
                 % (name_a, name_b, len(shared), sorted(shared)[:5])
             )
 
-def build_transforms(is_training, augmentation_strength="normal"):
+def build_transforms(is_training, augmentation_strength="normal", channels=1):
     """
     Build the image preprocessing pipeline.
 
@@ -245,10 +260,15 @@ def build_transforms(is_training, augmentation_strength="normal"):
     Randomising brightness during training removes that shortcut and forces the
     model to use shape instead.
     """
-    shared_steps = [
-        transforms.Grayscale(num_output_channels=1),
-        transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)),
-    ]
+    # With slice_context 3 the image arriving here already has three distinct
+    # channels, one per brain slice. Grayscale would average them into one and
+    # then copy that average back across all three, destroying exactly the
+    # depth information this mode exists to provide. So it is only applied in
+    # the single-slice case.
+    shared_steps = []
+    if channels == 1:
+        shared_steps.append(transforms.Grayscale(num_output_channels=1))
+    shared_steps.append(transforms.Resize((IMAGE_SIZE, IMAGE_SIZE)))
 
     if not is_training:
         augmentation_steps = []
@@ -264,9 +284,13 @@ def build_transforms(is_training, augmentation_strength="normal"):
             transforms.RandomAffine(degrees=5, translate=(0.05, 0.05)),
         ]
 
+    # The same constants are reused for every channel. Adjacent slices of one
+    # scan have almost identical intensity statistics, so measuring a separate
+    # mean per channel would produce three nearly equal numbers.
     final_steps = [
         transforms.ToTensor(),
-        transforms.Normalize(mean=[PIXEL_MEAN], std=[PIXEL_STD]),
+        transforms.Normalize(mean=[PIXEL_MEAN] * channels,
+                             std=[PIXEL_STD] * channels),
     ]
 
     return transforms.Compose(shared_steps + augmentation_steps + final_steps)
@@ -281,9 +305,74 @@ class ADNIDataset(Dataset):
     is a very different finding from mistakes scattered across many patients.
     """
 
-    def __init__(self, samples, transform):
+    def __init__(self, samples, transform, slice_context=1):
+        """
+        slice_context 1 returns one slice as one channel, which is the original
+        behaviour.
+
+        slice_context 3 returns the slice plus its two neighbours, stacked as
+        three channels. One 2D slice shows a cross-section. It cannot show how
+        a structure changes as you move through the brain, and ventricular
+        enlargement is exactly that kind of change. Three slices give the model
+        that gradient.
+        """
+        if slice_context not in (1, 3):
+            raise ValueError(
+                "slice_context must be 1 or 3, got %r. Three channels are "
+                "stacked with PIL's RGB merge, which takes exactly three bands."
+                % slice_context
+            )
+
         self.samples = samples
         self.transform = transform
+        self.slice_context = slice_context
+
+        # Only built when it is needed, because it walks every sample.
+        self.slices_by_patient = None
+        if slice_context > 1:
+            self.slices_by_patient = self._index_slices_by_patient(samples)
+
+    @staticmethod
+    def _index_slices_by_patient(samples):
+        """
+        Map each patient to {slice number: path}.
+
+        The neighbours of a slice have to come from the SAME patient. Reaching
+        into another patient's scan would mix two people into one input, which
+        is worse than the leakage this project exists to avoid.
+        """
+        index = {}
+        for image_path, _label, patient_id in samples:
+            slice_number = slice_number_from_filename(image_path)
+            if slice_number is None:
+                continue
+            index.setdefault(patient_id, {})[slice_number] = image_path
+        return index
+
+    def _neighbour_paths(self, image_path, patient_id):
+        """
+        Return the paths of the slice before, the slice itself, and the slice
+        after, in that order.
+
+        At the ends of a patient's stack there is no neighbour on one side, so
+        the end slice is repeated. That is the standard treatment and it means
+        every item still returns exactly three channels.
+        """
+        available = self.slices_by_patient.get(patient_id, {})
+        centre = slice_number_from_filename(image_path)
+
+        if centre is None or centre not in available:
+            # Filename did not parse. Fall back to repeating this slice, so a
+            # malformed name costs one weak sample instead of crashing a run.
+            return [image_path, image_path, image_path]
+
+        ordered = sorted(available.keys())
+        position = ordered.index(centre)
+
+        before = ordered[max(position - 1, 0)]
+        after = ordered[min(position + 1, len(ordered) - 1)]
+
+        return [available[before], available[centre], available[after]]
 
     def __len__(self):
         return len(self.samples)
@@ -291,11 +380,34 @@ class ADNIDataset(Dataset):
     def __getitem__(self, index):
         image_path, label, patient_id = self.samples[index]
 
-        # Open and immediately convert, so the file handle does not stay open.
-        # "L" is PIL's single channel greyscale mode.
-        with Image.open(image_path) as raw_image:
-            image = raw_image.convert("L")
-            image_tensor = self.transform(image)
+        if self.slice_context == 1:
+            # Open and immediately convert, so the file handle does not stay
+            # open. "L" is PIL's single channel greyscale mode.
+            with Image.open(image_path) as raw_image:
+                image = raw_image.convert("L")
+                image_tensor = self.transform(image)
+            return image_tensor, label, patient_id
+
+        # Three slices, merged into one image BEFORE the transform runs.
+        #
+        # This ordering is the whole trick. Transforming each slice separately
+        # would draw a different random rotation and shift for each one, so the
+        # three channels would no longer line up and the depth signal would be
+        # destroyed by the augmentation meant to help. Merging first means one
+        # random transform is drawn and applied to all three identically.
+        bands = []
+        reference_size = None
+        for path in self._neighbour_paths(image_path, patient_id):
+            with Image.open(path) as raw_image:
+                band = raw_image.convert("L")
+                if reference_size is None:
+                    reference_size = band.size
+                elif band.size != reference_size:
+                    band = band.resize(reference_size)
+                bands.append(band.copy())
+
+        merged = Image.merge("RGB", tuple(bands))
+        image_tensor = self.transform(merged)
 
         return image_tensor, label, patient_id
 
@@ -307,6 +419,7 @@ def get_dataloaders(
     seed=42,
     num_workers=4,
     augmentation_strength="normal",
+    slice_context=1,
 ):
     """
     The one function the training script calls.
@@ -327,11 +440,24 @@ def get_dataloaders(
     )
 
     train_dataset = ADNIDataset(
-    train_samples,
-    build_transforms(is_training=True, augmentation_strength=augmentation_strength),
+        train_samples,
+        build_transforms(
+            is_training=True,
+            augmentation_strength=augmentation_strength,
+            channels=slice_context,
+        ),
+        slice_context=slice_context,
     )
-    validation_dataset = ADNIDataset(validation_samples, build_transforms(is_training=False))
-    test_dataset = ADNIDataset(test_samples, build_transforms(is_training=False))
+    validation_dataset = ADNIDataset(
+        validation_samples,
+        build_transforms(is_training=False, channels=slice_context),
+        slice_context=slice_context,
+    )
+    test_dataset = ADNIDataset(
+        test_samples,
+        build_transforms(is_training=False, channels=slice_context),
+        slice_context=slice_context,
+    )
 
     train_loader = DataLoader(
         train_dataset,

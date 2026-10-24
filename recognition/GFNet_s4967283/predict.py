@@ -377,6 +377,9 @@ def parse_arguments():
                              "train/validation split will differ.")
     parser.add_argument("--no-figures", action="store_true",
                         help="Skip the figures and only write the predictions file.")
+    parser.add_argument("--slice-context", type=int, default=1, choices=[1, 3],
+                        help="Must match the value used for training, or the "
+                             "checkpoint will not load.")
     parser.add_argument("--patch-size", type=int, default=16,
                         help="Must match the patch size used for training, or "
                              "the checkpoint will not load. Ignored by the "
@@ -400,6 +403,7 @@ def main():
         batch_size=arguments.batch_size,
         seed=arguments.seed,
         num_workers=arguments.num_workers,
+        slice_context=arguments.slice_context,
     )
 
     loader = test_loader if arguments.split == "test" else validation_loader
@@ -409,6 +413,7 @@ def main():
     print("Loading %s from %s" % (arguments.model, arguments.checkpoint))
     model = build_model(
         arguments.model,
+        in_channels=arguments.slice_context,
         patch_size=arguments.patch_size,
     ).to(device)
     model.load_state_dict(torch.load(arguments.checkpoint, map_location=device))

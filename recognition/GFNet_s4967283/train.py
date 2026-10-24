@@ -328,6 +328,11 @@ def parse_arguments():
                         help="Training augmentation strength.")
     parser.add_argument("--dropout", type=float, default=None,
                         help="Override the model's default dropout rate.")
+    parser.add_argument("--slice-context", type=int, default=1, choices=[1, 3],
+                        help="1 feeds one slice as one channel. 3 feeds the "
+                             "slice plus its two neighbours as three channels, "
+                             "which gives the model depth context a single "
+                             "slice cannot carry.")
     parser.add_argument("--patch-size", type=int, default=16,
                         help="GFNet patch size. 16 gives a 14x14 token grid "
                              "and 112 frequency components. 8 gives 28x28 and "
@@ -353,15 +358,19 @@ def main():
         seed=arguments.seed,
         num_workers=arguments.num_workers,
         augmentation_strength=arguments.augmentation,
+        slice_context=arguments.slice_context,
     )
     print("  train batches: %d" % len(train_loader))
     print("  validation batches: %d" % len(validation_loader))
     print("  test batches: %d" % len(test_loader))
     
     # ---- Model ----
+    # in_channels must match what the loader produces, or the first layer
+    # will not accept the batch.
     model = build_model(
         arguments.model,
         image_size=IMAGE_SIZE,
+        in_channels=arguments.slice_context,
         dropout_rate=arguments.dropout,
         patch_size=arguments.patch_size,
     ).to(device)

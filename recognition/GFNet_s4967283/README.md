@@ -963,8 +963,8 @@ AD against CN. This section records every experiment run towards that number,
 including the ones that failed, so the effort behind the result is visible
 rather than scattered through the report.
 
-**Best achieved: 0.7122 at slice level and 0.7444 at patient level.** The
-target was not reached.
+**Best achieved: 0.7161 at slice level, by GFNet with patch size 8.** The best
+patient-level figure is 0.7444. The target was not reached.
 
 ### The ledger
 
@@ -979,7 +979,7 @@ target was not reached.
 | 7 | Decision threshold sweep, 0.10 to 0.60 | A better operating point exists | accuracy flat near 0.73 | moves errors between classes, adds no accuracy |
 | 8 | Even ensemble with BaselineCNN | The two models fail on different patients | 0.7600 patient level | +0.9 pts, but not GFNet, and costs 14 more total failures |
 | 9 | Mean-brightness-only control classifier | Check for a dataset artifact | 0.585 | the network learns real structure |
-| 10 | Patch size 8 instead of 16 | Frequency resolution is the constraint | [PENDING] | [PENDING] |
+| 10 | Patch size 8 instead of 16 | Frequency resolution is the constraint | val +2.9 pts, test +0.55 pts | **worked as designed, test barely moved** |
 | 11 | 2.5D input, three adjacent slices as channels | One slice lacks depth context | [PENDING] | [PENDING] |
 | 12 | Audit of the shipped train and test folders | Something systematic separates them | all 8 measures negligible or small | **ruled out** |
 | 13 | Subject-identity check by image correlation, test as control | The same person holds several IDs | duplicates at median ID gap 2, others at 47,026 | **confirmed. IDs are scan IDs** |
@@ -1006,16 +1006,64 @@ so epoch 60 of a 150-epoch schedule is at a different learning rate than epoch
 different trajectory. A clean test of training length would hold the schedule
 fixed and stop early.
 
+### Experiment 10 in detail, because the result is the clearest in the project
+
+GFNet mixes tokens by multiplying in the frequency domain. At patch 16 the
+token grid is 14 × 14, and `rfft2` keeps half the spectrum, so the filter
+learns over 14 × 8, which is 112 frequency components. Alzheimer's atrophy is
+subtle and spatially local, so 112 looked like a coarse instrument for it.
+
+Patch 8 gives a 28 × 28 grid, so 28 × 15, which is 420 components. Nearly four
+times the frequency resolution, on the one mechanism GFNet actually uses.
+
+**It worked, and the test score barely noticed.**
+
+| Patch | Epochs | Aug | Best epoch | Validation | Test | Gap |
+|---|---|---|---|---|---|---|
+| 16 | 80 | normal | 54 | 0.8134 | 0.7106 | 0.103 |
+| 16 | 80 | strong | 61 | 0.7891 | 0.7122 | 0.077 |
+| 16 | 150 | normal | 60 | 0.7907 | 0.6837 | 0.107 |
+| **8** | 80 | normal | 55 | **0.8422** | **0.7161** | **0.126** |
+
+Validation rose 2.9 points to the best of any run. Test rose 0.55 points. The
+validation-to-test gap widened to 0.126, the largest of the four.
+
+The cost was not small:
+
+| | Patch 16 | Patch 8 | Ratio |
+|---|---|---|---|
+| Parameters | 4,788,482 | 6,151,426 | 1.28× |
+| Peak GPU memory | 1.58 GB | 5.97 GB | 3.78× |
+| Seconds per epoch | 14.0 | 41.7 | 2.97× |
+| Inference rate | 5,589 img/s | 1,448 img/s | 0.26× |
+
+Four times the inference cost for half a point. As an engineering decision that
+is a clear no.
+
 ### What the ledger shows
 
-**Nothing in the training loop moves GFNet.** Four runs across three schedules
-and two augmentation settings all land between 0.684 and 0.712. Learning rate,
-epoch count, augmentation strength and weight decay have been varied. The
-plateau holds.
+Lining the four GFNet runs up next to each other gives the central result of
+this project.
 
-That points the remaining effort at the architecture and at the input
-representation, which is where experiments 10 and 11 go, rather than at further
-tuning.
+**Validation moved 5.3 points across these configurations. Test moved 3.2, and
+not in step with validation.** The run with the lowest validation accuracy
+(0.7891) produced a higher test score than the run with 0.7907. The run with
+the highest validation accuracy produced a test gain of half a point.
+
+Every change tried so far acts on how well the model fits the training cohort.
+Learning rate, epoch count, augmentation strength, weight decay, and now token
+resolution and parameter count. **Validation responds to all of them. Test
+responds to none of them.** The gap widens as validation improves, which is the
+signature of a model learning a cohort rather than a disease.
+
+So the binding constraint is not the model. It is the difference between the
+cohort the model trains on and the cohort it is tested on, which is the
+16-point gap the section above could not explain. Capacity cannot close it,
+because capacity is spent on fitting a cohort the test set does not resemble.
+
+That is why the remaining untested lever is the input representation rather
+than anything else. 2.5D input does not give the model more capacity over the
+same information. It gives it different information.
 
 ### The unexplained gap
 
