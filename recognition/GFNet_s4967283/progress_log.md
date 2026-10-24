@@ -552,24 +552,252 @@ what that average looks like one case at a time.
 
 ---
 
+## Day 8. Wednesday 21 October
+
+No cluster time today. I audited the marks instead.
+
+### Working out what 80% actually refers to
+
+Three different figures were being confused, including by me.
+
+| What | Means |
+|---|---|
+| Model accuracy 0.80 | GFNet on the ADNI test split |
+| Project mark 80% | 32 of 40 marks, the grade 7 condition |
+| Course mark 85% | across all four assessments |
+
+I went back through the specification criterion by criterion and worked out
+where the 40 marks sit, and which of them are already secure.
+
+The useful outcome: **about 4.5 marks were sitting unclaimed and needed no
+cluster time.** The pull request, the visual half of the error autopsy, the AI
+disclosure, and the Turnitin export. The pull request alone is a pass hurdle,
+so missing it would zero all forty marks.
+
+I also drafted the pull request description.
+
+---
+
+## Day 9. Thursday 22 October
+
+### I had the 0.80 rule wrong, and so did my notes
+
+I had been treating the 0.80 accuracy target as something I set myself in the
+feasibility review. It is in the specification, in the model table:
+
+> GFNet [Hard Difficulty] Use ADNI dataset. Global Filter Network using 2D FFT
+> token mixing; **minimum 0.8 test accuracy on AD vs CN.**
+
+It also applies to GFNet, not to the baseline. So the gap is measured from
+0.7122, not from the baseline's 0.7421, and it is 7 to 9 points rather than 5.
+
+Worth recording because I spent part of a day planning against the wrong
+target.
+
+---
+
+## Day 10. Friday 23 October
+
+Tutor feedback arrived: drop the feasibility review from the README, add a
+repository tree, and either hit 0.80 or show enough experimental evidence of
+trying.
+
+I kept the feasibility review. The written specification says its technical
+quality is marked as part of the report, and the cost of keeping it is a
+slightly longer README against the cost of losing marks the specification
+allocates. I will ask for the instruction in writing.
+
+The third point is the useful one. **A documented campaign can substitute for
+the number.** So I built the experiment ledger, which collects every experiment
+into one table a marker can read in thirty seconds.
+
+### The ensemble
+
+| | Slice | Patient | Patients wrong on all 20 |
+|---|---|---|---|
+| BaselineCNN | 0.7421 | 0.7511 | 40 |
+| GFNet | 0.7122 | 0.7444 | **28** |
+| Even split | **0.7494** | **0.7600** | 42 |
+
+The ensemble buys 0.9 patient points and costs the best safety property in the
+report. Catastrophic failures rise from 28 to 42, because averaging a
+confidently wrong baseline against a hedging GFNet pushes GFNet's
+borderline-correct slices over the line.
+
+I report the even split. The sweep found 0.7622 at weight 0.4, but that weight
+was chosen by looking at the test split, so claiming it would be tuning on test.
+
+### The 150-epoch run failed, and the diagnosis behind it was wrong
+
+I read GFNet's small validation-to-test gap as underfitting and ran it longer
+with lighter augmentation. Test accuracy fell 2.7 points, from 0.7106 to 0.6837.
+
+The number that disproves the diagnosis was already in the logs. GFNet reaches
+a training accuracy of 0.8843 against a validation accuracy of 0.7714. An
+11-point train-to-validation gap is overfitting. I had compared GFNet's
+validation-to-test gap against the baseline's instead of looking at its
+training accuracy.
+
+One more thing the run showed: the learning rate schedule is tied to the epoch
+count, so epoch 60 of a 150-epoch schedule sits at a different learning rate
+than epoch 60 of an 80-epoch schedule. It is not the same run with more epochs.
+
+### Chasing the validation-to-test gap
+
+Both models lose 11 to 16 points between validation and test. Both splits are
+patient-disjoint. That is too large to accept without an explanation.
+
+**First I compared the two shipped folders** on eight measures. Slice
+numbering, head size, head position, bounding box, tissue brightness, contrast
+and intensity percentiles. Every one came back negligible or small, the largest
+at Cohen's d 0.22. The folders are indistinguishable, so a whole class of
+explanation is closed.
+
+**Then I tested whether one person holds several IDs.** ADNI follows people for
+years. If sessions were filed under different IDs, a validation patient could
+be the same person as a training patient, and my ID-based check would pass
+regardless.
+
+It is true. The evidence is not subtle:
+
+| Group | n | Median ID gap | Within 20 |
+|---|---|---|---|
+| Validation, correlation >= 0.995 | 26 | **2** | 26 of 26 |
+| Validation, correlation < 0.995 | 135 | 47,026 | 31 of 135 |
+| Test, correlation >= 0.995 | 4 | **1** | 3 of 4 |
+| Test, correlation < 0.995 | 446 | 334,840 | **0 of 446** |
+
+Four orders of magnitude. The filename ID identifies a scan, not a person, and
+IDs run in sequence so one person's repeat scans land next to each other.
+16.1% of my validation patients share a person with training.
+
+**Then I measured what it costs.** About half a point of validation accuracy.
+It is real and it does not explain a 16-point gap.
+
+So I have two findings instead of one: a methodological flaw I can quantify,
+and a gap that stays open. I recorded the gap as unexplained rather than
+attributing it to a cause I cannot demonstrate.
+
+### Mistakes today
+
+1. I deleted the course's own `README.md` at the repository root, believing it
+   stopped mine from displaying. It does not. GitHub renders a README in every
+   directory. Restored from upstream.
+2. I edited a file on github.com, which created a commit my local clone did not
+   have, and the next push was rejected. Rule I am keeping: edit locally,
+   commit, push. Never the web editor on a repository I am working in.
+3. I named a script `inspect.py`, which shadows the Python standard library
+   `inspect` module. NumPy imports it during startup and got my file instead,
+   so `import numpy` failed with what looked like a NumPy bug. Python searches
+   the script's own directory first.
+4. My duplicate-detection script printed the wrong verdict, because I summarised
+   with a difference in means. Only a minority of patients are duplicates, so
+   the mean washed the effect out. The percentiles were in the same output and
+   told the real story. I had printed them without reading them.
+
+---
+
+## Day 11. Saturday 24 October
+
+### Patch size 8: it worked, and the test score did not care
+
+GFNet mixes tokens by multiplying in the frequency domain. At patch 16 the
+filter learns over 112 frequency components. At patch 8 it learns over 420.
+
+| Patch | Epochs | Aug | Best epoch | Validation | Test | Gap |
+|---|---|---|---|---|---|---|
+| 16 | 80 | normal | 54 | 0.8134 | 0.7106 | 0.103 |
+| 16 | 80 | strong | 61 | 0.7891 | 0.7122 | 0.077 |
+| 16 | 150 | normal | 60 | 0.7907 | 0.6837 | 0.107 |
+| **8** | 80 | normal | 55 | **0.8422** | **0.7161** | **0.126** |
+
+Validation rose 2.9 points to the best of any run. Test rose 0.55 points. The
+gap widened to the largest yet. The cost was 3.8 times the memory, 3 times the
+training time, and inference down from 5,589 to 1,448 images per second.
+
+### The result that explains all the others
+
+Lining the four GFNet runs up gives the central finding of the project.
+
+**Validation moved 5.3 points across these configurations. Test moved 3.2, and
+not in step with it.** The run with the lowest validation accuracy beat the run
+with 0.7907 on test.
+
+Learning rate, epoch count, augmentation strength, weight decay, token
+resolution and parameter count all change how well the model fits the training
+cohort. Validation responds to all of them. Test responds to none.
+
+So the constraint is not the model. It is the difference between the cohort the
+model trains on and the cohort it is tested on, which is the same 16-point gap
+I could not explain yesterday. Capacity cannot close it, because capacity is
+spent fitting a cohort the test set does not resemble.
+
+### 2.5D input
+
+Added `--slice-context 3`: the slice plus its two neighbours, stacked as three
+channels. The neighbours always come from the same patient, and edge slices
+repeat so every item has three channels.
+
+The trap is ordering. The three slices are merged into one image **before** the
+transform runs. Transformed separately, each would draw its own random rotation
+and shift, the channels would stop lining up, and the augmentation meant to
+help would destroy the depth signal. Eight tests pass, including twenty random
+draws with strong augmentation producing zero channel disagreement.
+
+This is the last accuracy experiment I plan to run. It is the only remaining
+lever that gives the model different information rather than more capacity over
+the same information.
+
+### Documentation
+
+- Every command in the README now carries its real expected output and a line
+  saying what to check. The specification asks for example inputs and outputs
+  directly, and my tutor asked for the same thing.
+- Added the repository tree.
+- Found that the README referenced `find_duplicate_subjects.py` and
+  `measure_leakage_impact.py` while the files were named `duplicate_subjects.py`
+  and `Measure_leakage_impact.py`. A marker following my own instructions would
+  have hit a missing file twice. Rangpur is case-sensitive, so the capital M
+  mattered too.
+- **Opened the pull request.** Two marks for opening it correctly and one for
+  the description, and it is a pass hurdle that zeroes all forty marks if
+  missed.
+
+### Something I should have seen on day one
+
+The day one audit output lists the first few training patient IDs:
+
+```
+first few patient IDs: ['218391', '218393', '228875', '228879', '236920']
+```
+
+218391 and 218393 are two apart. 228875 and 228879 are four apart. That is what
+a sequential scan-ID scheme looks like, and it was printed on my screen on the
+first day. I did not notice until a validation accuracy looked wrong ten days
+later.
+
+The audit also concluded "the shipped split is clean", which is true by ID and
+false by subject.
+
+---
+
 ## Still open
 
 - **The visual half of the error autopsy.** The four measured findings are
   written. I still need to look at `failures_baseline.png` and
-  `failures_gfnet.png` and describe what the slices look like. The question I
-  most want to answer: does patient 985197's scan look ordinary? An
-  ordinary-looking scan that both models get wrong at full confidence is a
-  harder problem than an odd-looking one.
-- **The pull request** to `shakes76/PatternAnalysis-2026`, branch
-  `topic-recognition`. Two marks and a pass hurdle.
+  `failures_gfnet.png` and describe what the slices show. The question I most
+  want to answer: does patient 985197's scan look ordinary? An ordinary-looking
+  scan that both models get wrong at full confidence is a harder problem than
+  an odd-looking one.
 - **The AI usage disclosure.** Drafted. I need to read it line by line and edit
   it until it describes what I actually did.
-- **The 0.8 target.** I am at 0.7421 slice and 0.7511 patient. Longer training,
-  patient aggregation and stronger regularisation together moved it 2.7 points.
-  The limitation section says why I think a single 2D slice is the ceiling.
+- **The 2.5D result.** Job running. Row 11 of the ledger.
+- **The 0.80 minimum.** Best is 0.7161 slice and 0.7444 patient for GFNet.
+  Fifteen experiments are recorded in the ledger, including two hypotheses the
+  measurements disproved.
 - **Turnitin submission** of the report as a PDF.
-- **Phase 2.** Respond to the code review on the pull request within about seven
-  days of receiving it. Two marks.
+- **Phase 2.** Respond to the code review on the pull request within about
+  seven days of receiving it. Two marks.
 
 ## Things I should be able to explain out loud
 
@@ -577,16 +805,17 @@ what that average looks like one case at a time.
 - Why the measured normalisation constants changed the pixel range the way they did
 - What GFNet does instead of self-attention, and why the convolution theorem
   makes that equivalent to global mixing
-- Why the rfft filter is 14 × 8 and not 14 × 14
+- Why the rfft filter is 14 x 8 and not 14 x 14, and why patch 8 gives 420
+  frequency components instead of 112
 - Why temperature scaling must be fitted on validation and not on test
 - Why accuracy does not change when the temperature changes
-- Why the widening validation-to-test gap means overfitting rather than a data shift
 - Why patient-level accuracy is the clinically honest number
 - Why a patient wrong on all 20 slices is worse than 20 scattered wrong slices
 - Why I ran a brightness-only classifier, and what its 0.585 tells me
-- Why strong augmentation lowered the fitted temperature from 1.90 to 1.11, and
-  what that says about the order of the two fixes
-- Why twenty patients failing on both architectures is different from twenty
-  failing on one
+- Why strong augmentation lowered the fitted temperature from 1.90 to 1.11
+- Why a median ID gap of 2 against 47,026 proves the IDs are scan IDs
+- Why validation moving 5.3 points while test moves 3.2 means the cohort is the
+  constraint and not the model
+- Why the three slices in 2.5D must be merged before the transform, not after
 - Why a confidence of 1.0000 on a wrong answer is the strongest evidence in my
   report that the confidence score cannot be automated on
