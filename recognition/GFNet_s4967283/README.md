@@ -307,48 +307,27 @@ demonstrate.
 
 ## Artificial Intelligence Usage Disclosure
 
-> **[READ THIS SECTION AND EDIT IT UNTIL IT IS ACCURATE. It must describe what
-> you did, in your words. Do not submit it unchecked.]**
+# Tool used:
+Anthropic Claude, mainly through an agentic coding session over approximately one week.
 
-**Tool used.** Anthropic Claude, in an agentic coding session, over about one
-week.
+# What I used it for:
+Claude helped me create the initial versions of several project files, including modules.py, dataset.py, train.py, predict.py, evaluate_calibration.py, visualise_data.py, and brightness_baseline.py. These were used as starting points rather than final solutions. I reviewed each file, made edits, corrected mistakes, and adapted the code to fit the requirements of the project.
+It also helped generate an early draft of the README structure and some explanatory text, which I substantially revised and rewrote during the final documentation process.
+During development, I used Claude as a debugging assistant when dealing with Python errors and configuring SLURM jobs on the university cluster. It was also useful for brainstorming potential analyses, including the brightness-ablation experiment, temperature scaling for calibration, patient-level prediction averaging, and strategies for addressing overfitting.
 
-**What I used it for.**
+# How I checked the output:
+I did not accept Claude's suggestions without verification. The project includes several checks that allowed me to validate the code before running expensive training jobs.
+In modules.py, I implemented and ran six self-tests. The most important test sets every GFNet filter weight to 1+0iand verifies that the FFT round-trip reconstruction reproduces the original input to within 4.8×〖10〗^(-7). This confirmed that the frequency-domain operations were functioning correctly.
+In dataset.py, I used an assertion to ensure that no patient appeared in more than one data split. I also manually checked the reported split sizes. The training and validation splits contained 915 and 161 patients respectively, giving a total of 1,076 patients, which matched the dataset audit.
+I independently verified the evaluation metrics by calculating them directly from the confusion matrix. For example, in the baseline model, 4042+2637=6679correct predictions out of 9000 samples, giving an accuracy of 0.7421, which matches the reported result.
+I also confirmed with teaching staff that the identifiers contained in the filenames correspond to patient IDs, which was important for ensuring that splitting by patient was implemented correctly.
+Several Claude-generated suggestions were incorrect and had to be fixed. One example was an invalid SLURM partition recommendation that appeared to come from outdated information. Other mistakes introduced during code edits included a duplicated keyword argument, a stray bracket causing a syntax error, and a missing .to(device) call. Each issue caused failed runs that I then diagnosed and corrected myself.
 
-- First versions of `modules.py`, `dataset.py`, `train.py`, `predict.py`,
-  `evaluate_calibration.py`, `visualise_data.py` and `brightness_baseline.py`.
-  I then read, edited and corrected each file.
-- A draft of the structure and the text of this README, which I then edited.
-- Help with SLURM configuration and with Python errors.
-- Ideas for analyses: the brightness ablation, temperature scaling, the
-  patient-level mean, and the overfit fix.
+# What I did myself:
+I selected the project topic, chose GFNet as the model architecture, and decided to perform the dataset split at the patient level rather than the image level. I carried out the background reading on Alzheimer's disease anatomy that informed the error analysis and interpretation of the results.
+All experimental decisions, result interpretation, discussion, conclusions, and recommendations are my own work. While Claude assisted with drafting code, troubleshooting, and generating ideas, I was responsible for verifying every implementation, testing every change, interpreting every result, and deciding what was ultimately included in the final report.
+I take responsibility for all code, analyses, and claims presented in this submission.
 
-**How I checked the output.**
-
-- `modules.py` holds six self-tests. I ran them before any GPU time. The most
-  important test sets every GFNet filter weight to 1 + 0i. It then confirms that
-  the FFT round trip returns its input without change, to within 4.8e-07.
-- `dataset.py` holds an assertion that raises an error if a patient appears in
-  two splits. I ran it and checked the reported split sizes by hand. 915 + 161
-  equals 1,076 patients, which matches the audit.
-- I checked the classification metrics by hand against the confusion matrix. For
-  the baseline, 4,042 + 2,637 correct out of 9,000 gives 0.7421. That matches
-  the reported accuracy.
-- Teaching staff confirmed that the filename IDs are patient IDs.
-- Several AI suggestions were wrong and I found them. One was an incorrect SLURM
-  partition that came from stale notes. Three separate edits to `train.py` gave
-  a duplicate keyword argument, a stray bracket, and a lost `.to(device)` call.
-  Each one failed a job before I found it.
-
-**What I did myself.** I chose the project and the model. I decided to split by
-patient. I did the reading on Alzheimer's anatomy that informs the error
-autopsy. I interpreted every result, and I wrote the engineering recommendation.
-
-I am responsible for every line of code and every claim in this report.
-
----
-
----
 
 ## References
 
