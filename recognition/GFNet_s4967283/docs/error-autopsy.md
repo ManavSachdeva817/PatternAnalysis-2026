@@ -104,31 +104,16 @@ case at a time.
 
 ### What the images show
 
-> **[FILL IN. This part needs your own eyes on the figures.]**
->
-> Open `figures/failures_baseline.png` and `figures/failures_gfnet.png`. For
-> each case, write two or three sentences on what the slice looks like:
->
-> - ventricle size, cortex thickness, hippocampus
-> - overall brightness compared with the class averages in
->   `fig3_class_averages.png`
-> - head position and rotation in the frame
-> - which slice number it is, since slices near the top or the bottom of the
->   stack show little brain tissue
->
-> Then answer these three questions, which the numbers above raise but cannot
-> settle:
->
-> 1. Does patient 985197 look unusual on the image, or does the scan look
->    ordinary? An ordinary-looking scan that both models get wrong at full
->    confidence is a harder problem than an odd-looking one.
-> 2. Do the 1274602 and 1265863 scans look brighter or darker than the NC
->    average? The brightness experiment reached 0.585 on mean intensity alone,
->    so a brightness explanation is testable here.
-> 3. Do the false negatives share a visible trait, such as ventricles that look
->    normal in size for a patient who has AD?
->
-> Close with one sentence. Name the kinds of case you would **not** trust this
-> prototype to handle.
+Looking at the false negative cases, patient 985197 is quite interesting because the scan does not immediately stand out as having the classic appearance people would associate with Alzheimer's disease. The ventricles are visible but do not look dramatically enlarged, and there is no obvious severe cortical thinning from this single slice. What stands out more is the image quality itself. The scan is much noisier and higher contrast than the others, making it look somewhat unusual, but the underlying brain anatomy still appears ordinary. The slice seems to come from the middle portion of the brain because there is still a substantial amount of brain tissue visible, and the head is positioned reasonably well with only minor off centering.
+Patient 1431781 also looks relatively ordinary when viewed anatomically. The ventricles appear moderately enlarged, but not to a degree that immediately screams Alzheimer's disease. The cortex still looks reasonably preserved, and although the hippocampal region cannot be clearly evaluated from this view alone, there is nothing dramatically abnormal visible. The image brightness appears normal compared to the surrounding scans, and the slice is likely taken near the centre of the brain because major internal structures are clearly visible.
+The false positive cases all seem to share a different pattern. Patient 1265863 has a relatively large ventricular space, and some of the surrounding tissue gives the impression of mild atrophy. Even though the patient is normal, I can understand why the model was fooled because the anatomy visually resembles features often associated with Alzheimer's disease. The scan also appears brighter than what would be expected from an average normal-control image. The head is positioned well, and the slice appears to be from the middle of the scan stack where the largest amount of anatomical information is visible.
+Patient 1253141 shows a similarly large ventricle and relatively open-looking spaces around the central part of the brain. The cortex appears slightly thinner than some other examples, although not enough to confidently diagnose disease from visual inspection alone. Like patient 1265863, the image looks brighter overall, which is important because the earlier brightness experiment suggested that intensity alone carries some predictive information. The scan is well centred and appears to be a central sagittal slice.
+Patient 1243833 displays much the same behaviour. The ventricles are clearly visible and somewhat enlarged, while the cortex remains reasonably intact. Nothing in the image looks extreme, but it does contain several characteristics that could push a classifier toward an Alzheimer's prediction. The image brightness also seems relatively high, and the head position and slice selection look normal.
+Patient 1274602 is probably the strongest example of this pattern. The ventricular region is quite large and dark, making the brain look more similar to the Alzheimer's examples than to a typical healthy control. The cortex also appears somewhat thin in several areas. On top of that, the image brightness is noticeably high, particularly in the white matter regions. This supports the idea that brightness may have contributed to the model's confident mistake.
+For the first question, I would say patient 985197 looks somewhat unusual because of the image quality rather than because of the anatomy. The heavy noise and contrast make the scan visually different from most of the others, but the actual brain structures appear relatively ordinary. That makes this a difficult error to explain. If the scan contained obvious Alzheimer's-related atrophy, the model's prediction would at least make some intuitive sense. Instead, the anatomy looks normal while both models remain extremely confident, which suggests they may be responding to features that are not immediately obvious to a human observer.
+For the second question, both patient 1274602 and patient 1265863 appear brighter than the normal-control average. The white matter regions are particularly bright, and the overall contrast is stronger than expected. Since the brightness-only experiment achieved an accuracy of 0.585, these examples provide visual evidence that image intensity could be influencing the model's decisions. I would not claim brightness is the sole reason for the errors, but it is a plausible contributing factor.
+For the third question, the false negatives do seem to share a visible trait. Neither patient 985197 nor patient 1431781 displays the kind of obvious ventricular enlargement or severe cortical thinning that many people associate with Alzheimer's disease. Their brains look relatively ordinary from these slices, which may explain why the model incorrectly classified them as normal. In contrast, many of the false positives have ventricles that look larger or more AD-like despite belonging to normal patients. This suggests the model may rely heavily on visible structural changes and struggle when Alzheimer's disease presents more subtly.
+Overall, I would not trust this prototype to handle borderline cases where Alzheimer's-related changes are subtle, image brightness differs from the training average, or normal ageing produces brain structures that visually resemble mild atrophy.
+
 
 ---
