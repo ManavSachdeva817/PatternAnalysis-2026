@@ -311,6 +311,60 @@ class FeedForward(nn.Module):
         return self.network(x)
 
 
+class DropPath(nn.Module):
+    """
+    Stochastic depth: drop a whole residual branch at random during training.
+
+    Why this exists
+    ---------------
+    Ordinary dropout zeroes individual activations. Stochastic depth zeroes the
+    ENTIRE branch for a sample, so that sample passes through the block as if
+    the block were not there. Over a batch, the network trains as an ensemble
+    of networks of differing depth.
+
+    This is the standard regulariser for the ViT and GFNet family, and the
+    GFNet paper uses it. Without it, extra depth mostly buys extra overfitting,
+    which is what my patch-size experiment showed when I added capacity a
+    different way.
+
+    The drop probability rises linearly with block index, so early blocks are
+    kept almost always and late blocks are dropped most often. Early features
+    are shared by everything downstream, so they should be stable.
+
+    At evaluation time this is the identity function.
+    """
+
+    def __init__(self, drop_probability=0.0):
+        super().__init__()
+        self.drop_probability = float(drop_probability)
+
+    def forward(self, x):
+        if self.drop_probability == 0.0 or not self.training:
+            return x
+
+        keep_probability = 1.0 - self.drop_probability
+
+        # Guard the edge case. At a drop probability of 1.0 the rescale below
+        # would divide by zero and return NaN, which would poison the residual
+        # instead of removing the branch from it. Returning zeros is the
+        # correct meaning: the branch contributes nothing and the identity path
+        # carries the signal through unchanged.
+        if keep_probability <= 0.0:
+            return torch.zeros_like(x)
+
+        # One Bernoulli draw per sample, broadcast over the other dimensions.
+        shape = (x.shape[0],) + (1,) * (x.ndim - 1)
+        mask = torch.rand(shape, dtype=x.dtype, device=x.device) < keep_probability
+
+        # Divide by keep_probability so the expected value is unchanged. Without
+        # this the activations would shrink during training and the model would
+        # behave differently at evaluation time.
+        return x * mask / keep_probability
+
+    def extra_repr(self):
+        return "drop_probability=%.3f" % self.drop_probability
+
+
 class GFNetBlock(nn.Module):
     """
     One GFNet block: normalise, filter, normalise, MLP, with a residual.
@@ -332,16 +386,23 @@ class GFNetBlock(nn.Module):
     before defending it in the report rather than taking it on trust.
     """
 
-    def __init__(self, dim, grid_h, grid_w, mlp_ratio=4.0, dropout_rate=0.0):
+    def __init__(self, dim, grid_h, grid_w, mlp_ratio=4.0, dropout_rate=0.0,
+                 drop_path_rate=0.0):
         super().__init__()
 
         self.norm1 = nn.LayerNorm(dim)
         self.filter = GlobalFilter(dim, grid_h, grid_w)
         self.norm2 = nn.LayerNorm(dim)
         self.feed_forward = FeedForward(dim, int(dim * mlp_ratio), dropout_rate)
+        self.drop_path = DropPath(drop_path_rate)
 
     def forward(self, x):
-        return x + self.feed_forward(self.norm2(self.filter(self.norm1(x))))
+        # The branch is wrapped in drop_path, NOT the residual. The identity
+        # path must always survive, or a dropped block would output zero
+        # instead of passing its input through.
+        return x + self.drop_path(
+            self.feed_forward(self.norm2(self.filter(self.norm1(x))))
+        )
 
 
 class GFNet(nn.Module):
@@ -385,6 +446,7 @@ class GFNet(nn.Module):
         depth=8,
         mlp_ratio=4.0,
         dropout_rate=0.1,
+        drop_path_rate=0.0,
     ):
         super().__init__()
 
@@ -406,6 +468,13 @@ class GFNet(nn.Module):
 
         self.embedding_dropout = nn.Dropout(dropout_rate)
 
+        # Drop probability rises linearly from 0 at the first block to
+        # drop_path_rate at the last. This is the schedule the ViT and GFNet
+        # papers use.
+        drop_path_schedule = [
+            drop_path_rate * index / max(depth - 1, 1) for index in range(depth)
+        ]
+
         self.blocks = nn.ModuleList([
             GFNetBlock(
                 dim=embed_dim,
@@ -413,8 +482,9 @@ class GFNet(nn.Module):
                 grid_w=grid_size,
                 mlp_ratio=mlp_ratio,
                 dropout_rate=dropout_rate,
+                drop_path_rate=drop_path_schedule[index],
             )
-            for _ in range(depth)
+            for index in range(depth)
         ])
 
         self.final_norm = nn.LayerNorm(embed_dim)
@@ -492,7 +562,7 @@ def count_trainable_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 def build_model(model_name, image_size=224, in_channels=1, num_classes=2,
-                dropout_rate=None, patch_size=16):
+                dropout_rate=None, patch_size=16, depth=8, drop_path_rate=0.0):
     """
     One place that maps a name to a model, so train.py and predict.py cannot
     drift apart on how a model is constructed.
@@ -520,7 +590,9 @@ def build_model(model_name, image_size=224, in_channels=1, num_classes=2,
             patch_size=patch_size,
             in_channels=in_channels,
             num_classes=num_classes,
+            depth=depth,
             dropout_rate=0.1 if dropout_rate is None else dropout_rate,
+            drop_path_rate=drop_path_rate,
         )
 
     raise ValueError("Unknown model name: %s" % model_name)

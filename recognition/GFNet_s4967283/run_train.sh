@@ -9,6 +9,12 @@
 #   sbatch run_train.sh gfnet 42 80 normal 8      patch size 8, finer tokens
 #   sbatch run_train.sh gfnet 42 80 normal 16 3   2.5D, three adjacent slices
 #
+# Full argument list: MODEL SEED EPOCHS AUG PATCH SLICES DEPTH DROPPATH WARMUP OPTIM
+#
+# The paper's training recipe, which is AdamW with decoupled weight decay,
+# a linear warmup, stochastic depth, and the depth of GFNet-Ti:
+#   sbatch run_train.sh gfnet 42 80 normal 16 1 12 0.1 5 adamw
+#
 # For the three-seed comparison later:
 #   for s in 42 1 2; do sbatch run_train.sh baseline $s; done
 #   for s in 42 1 2; do sbatch run_train.sh gfnet $s; done
@@ -43,6 +49,10 @@ EPOCHS=${3:-30}
 AUG=${4:-normal}
 PATCH=${5:-16}
 SLICES=${6:-1}
+DEPTH=${7:-8}
+DROPPATH=${8:-0.0}
+WARMUP=${9:-0}
+OPTIM=${10:-adam}
 
 # Patch size only affects GFNet. 16 gives a 14x14 token grid, which rfft2 turns
 # into 14x8, so 112 frequency components. 8 gives 28x28 and therefore 28x15,
@@ -57,6 +67,11 @@ fi
 if [ "$SLICES" != "1" ]; then
     OUTPUT_DIR="${OUTPUT_DIR}_s${SLICES}"
 fi
+# The paper's training recipe gets its own folder name, so the earlier results
+# stay exactly where they are.
+if [ "$OPTIM" != "adam" ] || [ "$DEPTH" != "8" ] || [ "$DROPPATH" != "0.0" ]; then
+    OUTPUT_DIR="${OUTPUT_DIR}_recipe"
+fi
 
 # A fresh shell on the compute node does not carry my activated venv.
 source ~/venvs/comp3710/bin/activate
@@ -65,7 +80,9 @@ echo "=== environment check ==="
 which python
 python -c "import torch; print('torch', torch.__version__, 'cuda:', torch.cuda.is_available())"
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
-echo "model=$MODEL seed=$SEED epochs=$EPOCHS aug=$AUG patch=$PATCH slices=$SLICES output=$OUTPUT_DIR"
+echo "model=$MODEL seed=$SEED epochs=$EPOCHS aug=$AUG patch=$PATCH slices=$SLICES"
+echo "depth=$DEPTH drop_path=$DROPPATH warmup=$WARMUP optimiser=$OPTIM"
+echo "output=$OUTPUT_DIR"
 echo "========================="
 echo
 
@@ -84,4 +101,8 @@ python train.py \
     --weight-decay 1e-3 \
     --patch-size "$PATCH" \
     --slice-context "$SLICES" \
+    --depth "$DEPTH" \
+    --drop-path "$DROPPATH" \
+    --warmup-epochs "$WARMUP" \
+    --optimiser "$OPTIM" \
     --output-dir "$OUTPUT_DIR"

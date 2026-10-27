@@ -333,6 +333,23 @@ def parse_arguments():
                              "slice plus its two neighbours as three channels, "
                              "which gives the model depth context a single "
                              "slice cannot carry.")
+    parser.add_argument("--depth", type=int, default=8,
+                        help="Number of GFNet blocks. 8 is my original. 12 "
+                             "matches GFNet-Ti, the smallest model in the "
+                             "paper. Ignored by the baseline.")
+    parser.add_argument("--drop-path", type=float, default=0.0,
+                        help="Stochastic depth rate, scaled linearly across "
+                             "blocks. The standard regulariser for this model "
+                             "family. 0.1 is a usual starting value.")
+    parser.add_argument("--warmup-epochs", type=int, default=0,
+                        help="Linear learning rate warmup before the cosine "
+                             "schedule. Transformer-family models are unstable "
+                             "in the first epochs without it.")
+    parser.add_argument("--optimiser", default="adam", choices=["adam", "adamw"],
+                        help="adamw decouples weight decay from the adaptive "
+                             "step, which is what every ViT and GFNet recipe "
+                             "assumes. Plain adam folds it into the update, so "
+                             "the same number regularises far less.")
     parser.add_argument("--patch-size", type=int, default=16,
                         help="GFNet patch size. 16 gives a 14x14 token grid "
                              "and 112 frequency components. 8 gives 28x28 and "
@@ -373,6 +390,8 @@ def main():
         in_channels=arguments.slice_context,
         dropout_rate=arguments.dropout,
         patch_size=arguments.patch_size,
+        depth=arguments.depth,
+        drop_path_rate=arguments.drop_path,
     ).to(device)
     parameter_count = count_trainable_parameters(model)
     print()
@@ -382,21 +401,60 @@ def main():
     # is why the model does not apply one.
     loss_function = nn.CrossEntropyLoss()
 
-    # Adam with weight decay. Adam adapts the step size per parameter, which
-    # means it usually trains sensibly without much learning rate tuning -
-    # worth a lot when I have one week.
-    optimiser = torch.optim.Adam(
-        model.parameters(),
-        lr=arguments.learning_rate,
-        weight_decay=arguments.weight_decay,
-    )
+    # Adam adapts the step size per parameter, which means it usually trains
+    # sensibly without much learning rate tuning. That was worth a lot in the
+    # first week of this project.
+    #
+    # AdamW is the better choice for this model family and I added it later.
+    # In plain Adam the weight decay term goes through the same adaptive
+    # division as the gradient, so a parameter with large gradients gets much
+    # less decay than one with small gradients. AdamW applies the decay
+    # directly to the weights instead, which is what every ViT and GFNet recipe
+    # assumes when it quotes a weight decay value.
+    #
+    # The default stays "adam" so that every earlier result in my report can
+    # still be reproduced exactly.
+    if arguments.optimiser == "adamw":
+        optimiser = torch.optim.AdamW(
+            model.parameters(),
+            lr=arguments.learning_rate,
+            weight_decay=arguments.weight_decay,
+        )
+    else:
+        optimiser = torch.optim.Adam(
+            model.parameters(),
+            lr=arguments.learning_rate,
+            weight_decay=arguments.weight_decay,
+        )
 
     # Cosine annealing winds the learning rate down smoothly to near zero by
     # the final epoch. Big steps early to make progress, small steps late to
     # settle into a minimum instead of bouncing around it.
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-        optimiser, T_max=arguments.epochs
-    )
+    #
+    # Warmup comes first when asked for. A transformer-family model at full
+    # learning rate from the first step can take a large bad step while the
+    # layer norms and the filter weights are still random, and never recover.
+    # My smoke test at 1e-3 collapsed into predicting a single class, which is
+    # exactly that failure.
+    if arguments.warmup_epochs > 0:
+        warmup = torch.optim.lr_scheduler.LinearLR(
+            optimiser,
+            start_factor=0.01,       # begin at 1% of the target rate
+            end_factor=1.0,
+            total_iters=arguments.warmup_epochs,
+        )
+        cosine = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimiser, T_max=max(arguments.epochs - arguments.warmup_epochs, 1)
+        )
+        scheduler = torch.optim.lr_scheduler.SequentialLR(
+            optimiser,
+            schedulers=[warmup, cosine],
+            milestones=[arguments.warmup_epochs],
+        )
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
+            optimiser, T_max=arguments.epochs
+        )
 
     # Reset the VRAM counter so the peak figure covers only this run.
     if device.type == "cuda":
