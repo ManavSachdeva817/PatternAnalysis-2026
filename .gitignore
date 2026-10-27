@@ -114,3 +114,4 @@ adni_subset/
 #     git add -f recognition/GFNet_s4967283/figures/my_figure.jpg
 # Better still, save figures as .png so this never comes up.
 outputs/
+figures_pre_recipe/
