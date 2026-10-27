@@ -380,6 +380,10 @@ def parse_arguments():
     parser.add_argument("--slice-context", type=int, default=1, choices=[1, 3],
                         help="Must match the value used for training, or the "
                              "checkpoint will not load.")
+    parser.add_argument("--depth", type=int, default=8,
+                        help="Must match the depth used for training, or the "
+                             "checkpoint will not load. 8 is my original, 12 "
+                             "is the recipe runs. Ignored by the baseline.")
     parser.add_argument("--patch-size", type=int, default=16,
                         help="Must match the patch size used for training, or "
                              "the checkpoint will not load. Ignored by the "
@@ -411,10 +415,14 @@ def main():
 
     print()
     print("Loading %s from %s" % (arguments.model, arguments.checkpoint))
+    # Every shape-affecting argument has to match the training run. Stochastic
+    # depth is not among them, because DropPath holds no parameters and is the
+    # identity in eval mode, so it never appears in the checkpoint.
     model = build_model(
         arguments.model,
         in_channels=arguments.slice_context,
         patch_size=arguments.patch_size,
+        depth=arguments.depth,
     ).to(device)
     model.load_state_dict(torch.load(arguments.checkpoint, map_location=device))
     print("  %d trainable parameters" % count_trainable_parameters(model))

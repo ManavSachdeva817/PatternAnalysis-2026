@@ -7,10 +7,10 @@
 # 12, so the figures and every calibration number have to come from that
 # checkpoint rather than the earlier one.
 #
-# Both shape-affecting arguments must be passed to predict.py. Patch size sets
-# the token grid and depth sets the block count, and the checkpoint will refuse
-# to load if either is wrong. That is the behaviour I want: a loud failure
-# rather than a silently different model.
+# BOTH shape-affecting arguments must reach predict.py. Patch size sets the
+# token grid and depth sets the block count. Leave either out and the
+# checkpoint refuses to load, which is the behaviour I want: a loud failure
+# rather than a silently different model with random weights in four blocks.
 
 #SBATCH --job-name=adni_recipe_fig
 #SBATCH --partition=comp3710
@@ -21,8 +21,6 @@
 #SBATCH --output=logs/%x_%j.out
 #SBATCH --error=logs/%x_%j.err
 
-# Stop at the first failure. A half-rebuilt figures folder mixes two models
-# together and the mix is invisible afterwards.
 set -e
 
 source ~/venvs/comp3710/bin/activate
@@ -34,12 +32,13 @@ echo "=== environment check ==="
 which python
 python -c "import torch; print('torch', torch.__version__, 'cuda:', torch.cuda.is_available())"
 nvidia-smi --query-gpu=name --format=csv,noheader
-echo "gfnet checkpoint: $GFNET_CKPT  (patch 8, depth 12)"
+echo "checkpoint: $GFNET_CKPT"
+echo "args:       $GFNET_ARGS"
 echo "========================="
 echo
 
-# Keep the old GFNet figures. The report quotes their numbers, and this run
-# overwrites the npz files they came from.
+# Keep the old GFNet figures. The report quotes numbers that came from those
+# npz files, and this run overwrites them.
 if [ ! -d figures_pre_recipe ]; then
     cp -r figures figures_pre_recipe
     echo "backed up figures/ to figures_pre_recipe/"
@@ -53,8 +52,7 @@ echo
 echo ">>> 2 of 3: gfnet, validation split, predictions only"
 python predict.py $GFNET_ARGS --split validation --no-figures --output-dir figures
 
-# The baseline predictions in figures/ are still current, so they are reused
-# rather than regenerated.
+# The baseline predictions in figures/ are still current, so they are reused.
 echo
 echo ">>> 3 of 3: calibration, reject option and temperature scaling"
 python evaluate_calibration.py \
