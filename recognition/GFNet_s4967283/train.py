@@ -83,7 +83,76 @@ def pick_device():
         print("No GPU found, running on CPU. This will be slow.")
     return device
 
-def run_one_epoch(model, loader, loss_function, optimiser, device, is_training):
+def mix_batch(images, labels, alpha, use_cutmix):
+    """
+    Blend a batch with a shuffled copy of itself, for mixup or cutmix.
+
+    Why this exists
+    ---------------
+    The training history for my best GFNet run shows train accuracy reaching
+    0.9954 while validation sits at 0.8649, and validation loss rising 90%
+    above its minimum while validation accuracy stays flat. The model has
+    memorised the training set and is becoming more confident about the answers
+    it gets wrong.
+
+    Mixup attacks that directly. Every batch is blended with a shuffled copy of
+    itself, so the model never sees the same input twice and cannot memorise
+    individual slices. The label is blended by the same fraction, so a 70/30
+    image carries a 70/30 target.
+
+    Cutmix does the same thing with a rectangle instead of a fade: a patch of
+    one image is pasted over another, and the label fraction is the area of the
+    patch. For medical images this keeps local texture intact where mixup makes
+    everything semi-transparent, so I alternate between the two.
+
+    Returns (mixed_images, labels_a, labels_b, lam). The loss is then
+    lam * loss(pred, labels_a) + (1 - lam) * loss(pred, labels_b), which is the
+    standard formulation and avoids needing soft targets in the loss function.
+    """
+    if alpha <= 0.0:
+        return images, labels, labels, 1.0
+
+    # Beta(alpha, alpha) with alpha below 1 puts most of its mass near 0 and 1,
+    # so most batches are only lightly mixed and a few are mixed hard.
+    lam = float(np.random.beta(alpha, alpha))
+
+    # Keep lam on the larger side so labels_a stays the dominant label. Without
+    # this the pair (lam, 1-lam) is symmetric and the bookkeeping is harder to
+    # read, with no difference to the result.
+    lam = max(lam, 1.0 - lam)
+
+    shuffled = torch.randperm(images.size(0), device=images.device)
+    labels_a, labels_b = labels, labels[shuffled]
+
+    if not use_cutmix:
+        mixed = lam * images + (1.0 - lam) * images[shuffled]
+        return mixed, labels_a, labels_b, lam
+
+    # Cutmix: a rectangle covering (1 - lam) of the area.
+    _, _, height, width = images.shape
+    ratio = (1.0 - lam) ** 0.5
+    box_h, box_w = int(height * ratio), int(width * ratio)
+
+    if box_h < 1 or box_w < 1:
+        # The patch would be empty, so nothing is mixed.
+        return images, labels, labels, 1.0
+
+    centre_y = np.random.randint(height)
+    centre_x = np.random.randint(width)
+    y1, y2 = np.clip([centre_y - box_h // 2, centre_y + box_h // 2], 0, height)
+    x1, x2 = np.clip([centre_x - box_w // 2, centre_x + box_w // 2], 0, width)
+
+    mixed = images.clone()
+    mixed[:, :, y1:y2, x1:x2] = images[shuffled][:, :, y1:y2, x1:x2]
+
+    # The box was clipped at the edges, so recompute lam from the real area
+    # rather than trusting the value it was drawn from.
+    lam = 1.0 - ((y2 - y1) * (x2 - x1) / float(height * width))
+    return mixed, labels_a, labels_b, lam
+
+
+def run_one_epoch(model, loader, loss_function, optimiser, device, is_training,
+                  mix_alpha=0.0, cutmix_probability=0.5):
     """
     Run a single pass over one dataloader.
 
@@ -92,6 +161,12 @@ def run_one_epoch(model, loader, loss_function, optimiser, device, is_training):
     time.
 
     Returns (average_loss, accuracy).
+
+    With mix_alpha above zero, training batches are blended. Reported training
+    accuracy is then measured against the dominant label only, so it reads
+    lower than the model's true fit. That is useful rather than a problem: if
+    training accuracy stops climbing to 0.99, the memorisation this is meant to
+    prevent has been prevented.
     """
     if is_training:
         model.train()
@@ -113,8 +188,17 @@ def run_one_epoch(model, loader, loss_function, optimiser, device, is_training):
             if is_training:
                 optimiser.zero_grad(set_to_none=True)
 
-            logits = model(images)
-            loss = loss_function(logits, labels)
+            if is_training and mix_alpha > 0.0:
+                use_cutmix = np.random.rand() < cutmix_probability
+                mixed_images, labels_a, labels_b, lam = mix_batch(
+                    images, labels, mix_alpha, use_cutmix
+                )
+                logits = model(mixed_images)
+                loss = (lam * loss_function(logits, labels_a)
+                        + (1.0 - lam) * loss_function(logits, labels_b))
+            else:
+                logits = model(images)
+                loss = loss_function(logits, labels)
 
             if is_training:
                 loss.backward()
@@ -345,6 +429,18 @@ def parse_arguments():
                         help="Linear learning rate warmup before the cosine "
                              "schedule. Transformer-family models are unstable "
                              "in the first epochs without it.")
+    parser.add_argument("--mixup", type=float, default=0.0,
+                        help="Mixup and cutmix alpha. 0 turns it off. 0.2 to "
+                             "0.8 are usual. Blends every training batch with "
+                             "a shuffled copy of itself so the model cannot "
+                             "memorise individual slices.")
+    parser.add_argument("--cutmix-probability", type=float, default=0.5,
+                        help="Share of mixed batches that use cutmix rather "
+                             "than mixup. Only used when --mixup is above 0.")
+    parser.add_argument("--label-smoothing", type=float, default=0.0,
+                        help="Softens the target from 1.0 to 1 - value. Stops "
+                             "the model driving its outputs to 0 and 1, which "
+                             "is what a fitted temperature of 4.59 measures.")
     parser.add_argument("--optimiser", default="adam", choices=["adam", "adamw"],
                         help="adamw decouples weight decay from the adaptive "
                              "step, which is what every ViT and GFNet recipe "
@@ -399,7 +495,14 @@ def main():
 
     # CrossEntropyLoss expects raw logits and applies the softmax itself, which
     # is why the model does not apply one.
-    loss_function = nn.CrossEntropyLoss()
+    # Label smoothing replaces the hard target of 1.0 with 1 - value, spreading
+    # the remainder across the other classes. The model can then never reduce
+    # its loss by becoming more certain, which is exactly the behaviour the
+    # training curve shows: validation loss rising 90% while validation
+    # accuracy stays flat.
+    #
+    # The default is 0.0, so every earlier result still reproduces.
+    loss_function = nn.CrossEntropyLoss(label_smoothing=arguments.label_smoothing)
 
     # Adam adapts the step size per parameter, which means it usually trains
     # sensibly without much learning rate tuning. That was worth a lot in the
@@ -481,7 +584,9 @@ def main():
         epoch_start_time = time.time()
 
         train_loss, train_accuracy = run_one_epoch(
-            model, train_loader, loss_function, optimiser, device, is_training=True
+            model, train_loader, loss_function, optimiser, device, is_training=True,
+            mix_alpha=arguments.mixup,
+            cutmix_probability=arguments.cutmix_probability,
         )
         validation_loss, validation_accuracy = run_one_epoch(
             model, validation_loader, loss_function, optimiser, device, is_training=False

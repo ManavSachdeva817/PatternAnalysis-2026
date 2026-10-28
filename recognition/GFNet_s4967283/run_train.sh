@@ -15,6 +15,14 @@
 # a linear warmup, stochastic depth, and the depth of GFNet-Ti:
 #   sbatch run_train.sh gfnet 42 80 normal 16 1 12 0.1 5 adamw
 #
+# Full list: MODEL SEED EPOCHS AUG PATCH SLICES DEPTH DROPPATH WARMUP OPTIM MIXUP SMOOTH
+#
+# The anti-memorisation run. The training history showed train accuracy at
+# 0.9954 against validation at 0.8649, so the model had memorised the training
+# set. Mixup stops it seeing the same slice twice and label smoothing stops it
+# driving its outputs to 0 and 1:
+#   sbatch run_train.sh gfnet 42 80 strong 8 1 12 0.3 5 adamw 0.8 0.1
+#
 # For the three-seed comparison later:
 #   for s in 42 1 2; do sbatch run_train.sh baseline $s; done
 #   for s in 42 1 2; do sbatch run_train.sh gfnet $s; done
@@ -53,6 +61,8 @@ DEPTH=${7:-8}
 DROPPATH=${8:-0.0}
 WARMUP=${9:-0}
 OPTIM=${10:-adam}
+MIXUP=${11:-0.0}
+SMOOTH=${12:-0.0}
 
 # Patch size only affects GFNet. 16 gives a 14x14 token grid, which rfft2 turns
 # into 14x8, so 112 frequency components. 8 gives 28x28 and therefore 28x15,
@@ -72,6 +82,11 @@ fi
 if [ "$OPTIM" != "adam" ] || [ "$DEPTH" != "8" ] || [ "$DROPPATH" != "0.0" ]; then
     OUTPUT_DIR="${OUTPUT_DIR}_recipe"
 fi
+# Mixup and label smoothing get their own folder too, so the runs without them
+# keep the numbers already in the report.
+if [ "$MIXUP" != "0.0" ] || [ "$SMOOTH" != "0.0" ]; then
+    OUTPUT_DIR="${OUTPUT_DIR}_mix"
+fi
 
 # A fresh shell on the compute node does not carry my activated venv.
 source ~/venvs/comp3710/bin/activate
@@ -82,6 +97,7 @@ python -c "import torch; print('torch', torch.__version__, 'cuda:', torch.cuda.i
 nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
 echo "model=$MODEL seed=$SEED epochs=$EPOCHS aug=$AUG patch=$PATCH slices=$SLICES"
 echo "depth=$DEPTH drop_path=$DROPPATH warmup=$WARMUP optimiser=$OPTIM"
+echo "mixup=$MIXUP label_smoothing=$SMOOTH"
 echo "output=$OUTPUT_DIR"
 echo "========================="
 echo
@@ -105,4 +121,6 @@ python train.py \
     --drop-path "$DROPPATH" \
     --warmup-epochs "$WARMUP" \
     --optimiser "$OPTIM" \
+    --mixup "$MIXUP" \
+    --label-smoothing "$SMOOTH" \
     --output-dir "$OUTPUT_DIR"
