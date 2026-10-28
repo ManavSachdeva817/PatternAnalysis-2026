@@ -25,7 +25,7 @@ set -e
 
 source ~/venvs/comp3710/bin/activate
 
-GFNET_CKPT=outputs_gfnet_seed42_normal_p8_recipe/best_gfnet.pt
+GFNET_CKPT=outputs_gfnet_seed42_strong_p8_recipe_mix/best_gfnet.pt
 GFNET_ARGS="--model gfnet --checkpoint $GFNET_CKPT --patch-size 8 --depth 12"
 
 echo "=== environment check ==="
