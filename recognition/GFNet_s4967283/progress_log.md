@@ -781,21 +781,187 @@ false by subject.
 
 ---
 
+## Day 12. Sunday 25 October
+
+### 2.5D failed, and my own day-one measurement predicted it
+
+| | Single slice | Three slices | Change |
+|---|---|---|---|
+| Validation | 0.8134 | 0.7901 | −2.3 pts |
+| Test | 0.7106 | 0.6863 | **−2.4 pts** |
+| AD recall | 0.5821 | 0.4632 | **−11.9 pts** |
+| Seconds per epoch | 14.0 | 33.7 | 2.41× |
+
+`visualise_data.py` printed this on day one:
+
+```
+same patient, adjacent slices:  mean 0.9612
+different patients, same class: mean 0.6769
+```
+
+Adjacent slices correlate at 0.9612. Stacking three of them does not add
+depth information, it adds two near-copies of the slice already there. I paid
+2.4 times the data loading cost for about 4% new signal per channel.
+
+The AD recall collapse is the worse part. The model now misses 54% of
+Alzheimer's cases. Three highly correlated channels pushed it further towards
+its existing preference for calling things normal.
+
+I should have checked that correlation figure before running the experiment. It
+was in my own output from the first day and it predicts the result.
+
+### The campaign closed
+
+Five GFNet configurations across four axes: training length, regularisation,
+token resolution and input representation. Validation moved 5.3 points. Test
+moved 3.2 and did not track it. Not one run crossed 0.72.
+
+I recorded the search as complete rather than abandoned, with a table of what
+would be worth trying next and why each is out of scope. One row in it is the
+honest one: pooling the two shipped folders and re-splitting by subject would
+very likely clear 0.80, and it would stop being a measurement on a held-out
+cohort. I would rather report 0.7161 on a genuine held-out set than 0.85 on a
+set I built to be easier.
+
+---
+
+## Day 13. Monday 26 October
+
+### Tutor feedback and the restructure
+
+Three points: the report is too long to go through, a README on GitHub can link
+to separate pages, and either hit 0.80 or show enough experimental evidence.
+
+The README was 11,442 words. It is now **2,594**, with the problem, the
+results, three key findings and the recommendation on the main page, and seven
+linked pages under `docs/` holding the detail.
+
+`full_report.md` concatenates everything back into one document for the
+Turnitin PDF, so GitHub readers get a short navigable page and the marker gets
+the whole report.
+
+### Expected output for every command
+
+My tutor also asked for the expected output after each command. The
+specification asks for the same thing under "Example inputs, outputs, and
+visual plots". Every command in the report now shows its real output, abridged,
+with a line saying what to check.
+
+Real output only. A marker who runs my code and sees something different from
+what I documented has found a worse problem than a missing output block.
+
+### Something I found while doing it
+
+The README referenced `find_duplicate_subjects.py` and
+`measure_leakage_impact.py`. The files were named `duplicate_subjects.py` and
+`Measure_leakage_impact.py`. A marker following my own instructions would have
+hit a missing file twice, and Rangpur is case-sensitive so the capital M
+mattered too.
+
+### Submitted
+
+Built the Word version with bordered tables, shaded header rows, boxed code
+blocks and all twelve figures. Wrote the error autopsy observations and the AI
+disclosure myself. Exported and submitted to Turnitin.
+
+---
+
+## Day 14. Tuesday 27 October
+
+### Three gaps between my implementation and how GFNet is actually trained
+
+I went looking at the reference architecture and found the training recipe
+mattered more than the architecture.
+
+1. **Plain `Adam`, not `AdamW`.** In `Adam` the weight decay goes through the
+   same adaptive division as the gradient, so `--weight-decay 1e-3` regularised
+   far less than the number suggests. Every ViT and GFNet recipe uses decoupled
+   decay.
+2. **No warmup.** Cosine annealing started at full rate from epoch 0. This also
+   explains my smoke test at 1e-3 collapsing into a single class.
+3. **No stochastic depth.** The standard regulariser for this family, and what
+   makes depth usable at all.
+
+Fixed all three and set depth to 12, which matches GFNet-Ti.
+
+### The results
+
+| Run | Validation | Test | Best epoch |
+|---|---|---|---|
+| depth 8, Adam, no warmup | 0.8134 | 0.7106 | 54 of 80 |
+| recipe, patch 16, 80 ep | 0.8453 | 0.7256 | **73 of 80** |
+| recipe, patch 16, 150 ep | 0.8680 | 0.7294 | **116 of 150** |
+| **recipe, patch 8, 80 ep** | 0.8689 | **0.7450** | **65 of 80** |
+
+**GFNet now beats the baseline.** 0.7450 against 0.7421 at slice level, and
+0.7578 against 0.7511 at patient level.
+
+Every recipe run also peaked late, at 73, 116 and 65 rather than the 54 to 63
+of every earlier run. The recipe did not only raise the endpoint, it changed
+the trajectory, and none of these runs had converged.
+
+### The finding: accuracy and calibration traded directly
+
+| | Baseline | GFNet, old | GFNet, recipe |
+|---|---|---|---|
+| Test accuracy | 0.7421 | 0.7122 | **0.7450** |
+| Calibration error | 0.1812 | **0.0934** | 0.2231 |
+| Confidence when wrong | 0.8803 | 0.7499 | **0.9427** |
+| Separation | 0.0579 | **0.0782** | 0.0332 |
+| Fitted temperature | 1.20 | 1.11 | **4.59** |
+
+A fitted temperature of 4.59. The old GFNet needed 1.11. All ten of the new
+model's most confident mistakes sit at exactly 1.0000, where the old model's
+worst was 0.9990.
+
+**So the recipe bought accuracy and paid for it in calibration**, and my
+report's central sentence, that the baseline is the better classifier and
+GFNet the more trustworthy one, is now false in both halves.
+
+The twist that makes it useful: temperature scaling cuts the new model's error
+by 49%, from 0.2231 to 0.1127, against the baseline's 9%. **After scaling,
+GFNet is both more accurate and better calibrated than the baseline.** That
+turns calibration from an optional extra into the thing that makes the
+recommendation work.
+
+### Mistakes today
+
+1. I committed a change to `predict.py` with a message describing it, and the
+   commit did not contain the change. The file on my laptop had been written a
+   moment after I staged. Two jobs failed on `unrecognized arguments: --depth`
+   before I checked `git status` on Rangpur instead of trusting the commit
+   message. Rule I am keeping: `git show --stat HEAD` after any commit I am
+   about to depend on.
+2. I had two versions of `run_recipe_figures.sh`, one without `--depth 12`. The
+   older one existed on Rangpur as an untracked file, so `git pull` left it
+   alone and the job kept failing with the same error.
+3. I read a job that printed `=== done ===` with an empty error file as a
+   failure, because it finished in 30 seconds and I expected it to take longer.
+
+### What the loud failure was worth
+
+`predict.py` refused to load a depth-12 checkpoint into a depth-8 model. Had it
+silently filled the missing four blocks with random weights, it would have
+produced an accuracy near 0.5, a plausible-looking figure set, and a number I
+would have put in the report.
+
+---
+
 ## Still open
 
-- **The visual half of the error autopsy.** The four measured findings are
-  written. I still need to look at `failures_baseline.png` and
-  `failures_gfnet.png` and describe what the slices show. The question I most
-  want to answer: does patient 985197's scan look ordinary? An ordinary-looking
-  scan that both models get wrong at full confidence is a harder problem than
-  an odd-looking one.
-- **The AI usage disclosure.** Drafted. I need to read it line by line and edit
-  it until it describes what I actually did.
-- **The 2.5D result.** Job running. Row 11 of the ledger.
-- **The 0.80 minimum.** Best is 0.7161 slice and 0.7444 patient for GFNet.
-  Fifteen experiments are recorded in the ledger, including two hypotheses the
-  measurements disproved.
-- **Turnitin submission** of the report as a PDF.
+- **The 150-epoch run at patch 8 with the recipe.** Queued. The 80-epoch
+  version peaked at epoch 65 of 80, so it had not converged.
+- **Test-time augmentation and label smoothing.** Not yet implemented. Label
+  smoothing should also attack the 4.59 temperature directly.
+- **The report rewrite.** My central conclusion has reversed and the submitted
+  version says the opposite of what the numbers now show. This is the work that
+  matters most, and the hard cutoff for experiments is Thursday midday so it
+  gets done properly.
+- **The error autopsy.** My observations cover the baseline and the depth-8
+  GFNet. The recipe model fails on completely different patients.
+- **The AI disclosure.** It says staff confirmed the filename IDs are patient
+  IDs. That is what I was told, and my own experiment later disproved it. The
+  sentence needs to acknowledge both.
 - **Phase 2.** Respond to the code review on the pull request within about
   seven days of receiving it. Two marks.
 
@@ -812,10 +978,12 @@ false by subject.
 - Why patient-level accuracy is the clinically honest number
 - Why a patient wrong on all 20 slices is worse than 20 scattered wrong slices
 - Why I ran a brightness-only classifier, and what its 0.585 tells me
-- Why strong augmentation lowered the fitted temperature from 1.90 to 1.11
 - Why a median ID gap of 2 against 47,026 proves the IDs are scan IDs
-- Why validation moving 5.3 points while test moves 3.2 means the cohort is the
-  constraint and not the model
 - Why the three slices in 2.5D must be merged before the transform, not after
+- Why adjacent slices correlating at 0.9612 predicts that 2.5D would fail
+- Why plain Adam regularises less than AdamW at the same weight decay number
+- Why stochastic depth must drop a whole sample's branch and not scatter zeros
+- Why a fitted temperature of 4.59 means the model is badly overconfident, and
+  why one scalar fixes most of it
 - Why a confidence of 1.0000 on a wrong answer is the strongest evidence in my
   report that the confidence score cannot be automated on

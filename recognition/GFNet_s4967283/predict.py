@@ -380,14 +380,14 @@ def parse_arguments():
     parser.add_argument("--slice-context", type=int, default=1, choices=[1, 3],
                         help="Must match the value used for training, or the "
                              "checkpoint will not load.")
-    parser.add_argument("--depth", type=int, default=8,
-                        help="Must match the depth used for training, or the "
-                             "checkpoint will not load. 8 is my original, 12 "
-                             "is the recipe runs. Ignored by the baseline.")
     parser.add_argument("--patch-size", type=int, default=16,
                         help="Must match the patch size used for training, or "
                              "the checkpoint will not load. Ignored by the "
                              "baseline.")
+    parser.add_argument("--depth", type=int, default=8,
+                        help="Must match the depth used for training, or the "
+                             "checkpoint will not load. 8 is my original, 12 "
+                             "is the recipe runs. Ignored by the baseline.")
     return parser.parse_args()
 
 
