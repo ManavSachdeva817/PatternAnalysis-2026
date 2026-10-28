@@ -70,7 +70,7 @@ def undo_normalisation(image_tensor):
     return np.clip(image, 0.0, 1.0)
 
 
-def run_inference(model, loader, device):
+def run_inference(model, loader, device, use_tta=False):
     """
     Run the model over a whole dataloader and keep everything I need later.
 
@@ -78,10 +78,31 @@ def run_inference(model, loader, device):
     need to show the actual slices that went wrong. That costs memory, so this
     is fine for 9,000 test slices but would need rethinking for a much larger
     set.
+
+    Test-time augmentation
+    ----------------------
+    With use_tta, every slice is scored twice: as it is, and mirrored left to
+    right. The two probability vectors are averaged.
+
+    Why a mirror and not something else. The training augmentation already
+    applies RandomHorizontalFlip, so the model has seen mirrored brains
+    throughout training and a mirror is in the distribution it learned. A
+    rotation or a shift would be too, but a mirror is the largest change that
+    leaves the label untouched, so it is the one most likely to disagree with
+    the original and therefore the one most likely to help.
+
+    The honest caveat is the same one the augmentation section carries:
+    Alzheimer's atrophy is not always symmetric between hemispheres, so a
+    mirrored brain is not perfectly label-preserving. That is an argument for
+    measuring the gain rather than assuming it, which is why the plain
+    probabilities are kept alongside.
+
+    This costs one extra forward pass per batch and changes no weights.
     """
     model.eval()
 
     all_probabilities = []
+    all_plain = []
     all_labels = []
     all_patients = []
     all_images = []
@@ -90,16 +111,26 @@ def run_inference(model, loader, device):
         for images, labels, patient_ids in loader:
             images_on_device = images.to(device, non_blocking=True)
 
-            logits = model(images_on_device)
-            probabilities = torch.softmax(logits, dim=1)
+            plain = torch.softmax(model(images_on_device), dim=1)
+
+            if use_tta:
+                # dims=[-1] is the width axis, so this is a left-right mirror.
+                mirrored_images = torch.flip(images_on_device, dims=[-1])
+                mirrored = torch.softmax(model(mirrored_images), dim=1)
+                probabilities = (plain + mirrored) / 2.0
+            else:
+                probabilities = plain
 
             all_probabilities.append(probabilities.cpu().numpy())
+            all_plain.append(plain.cpu().numpy())
             all_labels.append(labels.numpy())
             all_patients.extend(list(patient_ids))
             all_images.append(images.cpu())
 
     return {
         "probabilities": np.concatenate(all_probabilities),
+        # Kept so the gain from averaging can be reported rather than assumed.
+        "plain_probabilities": np.concatenate(all_plain),
         "labels": np.concatenate(all_labels),
         "patient_ids": np.array(all_patients),
         "images": torch.cat(all_images),
@@ -380,14 +411,19 @@ def parse_arguments():
     parser.add_argument("--slice-context", type=int, default=1, choices=[1, 3],
                         help="Must match the value used for training, or the "
                              "checkpoint will not load.")
-    parser.add_argument("--patch-size", type=int, default=16,
-                        help="Must match the patch size used for training, or "
-                             "the checkpoint will not load. Ignored by the "
-                             "baseline.")
+    parser.add_argument("--tta", action="store_true",
+                        help="Test-time augmentation. Score every slice twice, "
+                             "as it is and mirrored left to right, and average "
+                             "the two. One extra forward pass per batch, no "
+                             "retraining, no change to the weights.")
     parser.add_argument("--depth", type=int, default=8,
                         help="Must match the depth used for training, or the "
                              "checkpoint will not load. 8 is my original, 12 "
                              "is the recipe runs. Ignored by the baseline.")
+    parser.add_argument("--patch-size", type=int, default=16,
+                        help="Must match the patch size used for training, or "
+                             "the checkpoint will not load. Ignored by the "
+                             "baseline.")
     return parser.parse_args()
 
 
@@ -427,10 +463,24 @@ def main():
     model.load_state_dict(torch.load(arguments.checkpoint, map_location=device))
     print("  %d trainable parameters" % count_trainable_parameters(model))
 
-    results = run_inference(model, loader, device)
+    results = run_inference(model, loader, device, use_tta=arguments.tta)
 
     print_metrics(results["probabilities"], results["labels"])
     print_patient_level(results["probabilities"], results["labels"], results["patient_ids"])
+
+    # Report what the averaging actually bought, rather than assuming it helped.
+    if arguments.tta:
+        plain = results["plain_probabilities"]
+        labels = results["labels"]
+        plain_accuracy = float(((plain[:, 1] >= 0.5).astype(int) == labels).mean())
+        tta_accuracy = float(
+            ((results["probabilities"][:, 1] >= 0.5).astype(int) == labels).mean()
+        )
+        print()
+        print("  TEST-TIME AUGMENTATION")
+        print("    without: %.4f" % plain_accuracy)
+        print("    with:    %.4f" % tta_accuracy)
+        print("    change:  %+.2f points" % ((tta_accuracy - plain_accuracy) * 100))
 
     # Save the probabilities. The calibration analysis reads this file.
     predictions_path = os.path.join(
