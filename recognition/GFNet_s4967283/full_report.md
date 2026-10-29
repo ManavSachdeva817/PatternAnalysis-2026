@@ -124,7 +124,11 @@ The three differ only in how GFNet was trained:
 | Accuracy build | normal | 0.1 | none | none |
 | Recommended | strong | 0.3 | 0.8 | 0.1 |
 
-Both use patch size 8, depth 12, AdamW, and a five-epoch warmup. The
+Both use patch size 8, depth 12, AdamW, and a five-epoch warmup. That
+combination is the recipe the GFNet paper trains with [1], which it takes
+from DeiT [4]. My first runs used plain Adam with no warmup and no
+stochastic depth, and closing that gap gave the largest single gain in the
+project. The
 differences and their effects are set out in the
 experiment ledger section below.
 
@@ -2048,3 +2052,9 @@ Intelligence*, vol. 45, no. 6, pp. 7837–7850, 2023.
 neural networks," in *Proc. ICML*, 2017. This paper is the source of the
 temperature scaling method and of the Expected Calibration Error metric used in
 this report.
+
+[4] H. Touvron, M. Cord, M. Douze, F. Massa, A. Sablayrolles, H. Jegou,
+"Training data-efficient image transformers and distillation through
+attention," in *Proc. ICML*, 2021. This paper is the source of the training
+recipe used here: AdamW with decoupled weight decay, a linear warmup,
+stochastic depth, mixup, cutmix and label smoothing.
