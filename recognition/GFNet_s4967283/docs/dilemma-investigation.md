@@ -40,73 +40,88 @@ augmentation setting.
 
 This is the core of the dilemma. I measured it with `evaluate_calibration.py`.
 
-| Measure | BaselineCNN | GFNet |
-|---|---|---|
-| Expected Calibration Error | 0.1812 | **0.0934** |
-| Worst single bin gap | 0.2603 | **0.1594** |
-| Mean confidence when correct | 0.9382 | 0.8281 |
-| Mean confidence when wrong | 0.8803 | 0.7499 |
-| Separation | 0.0579 | **0.0782** |
+Three models are compared, because the training recipe moved calibration far
+more than it moved accuracy, and the direction reversed twice.
+
+| Measure | BaselineCNN | GFNet, accuracy build | **GFNet, recommended** |
+|---|---|---|---|
+| Expected Calibration Error | 0.1812 | 0.2231 | **0.0614** |
+| Worst single bin gap | 0.2603 | 0.3953 | **0.1110** |
+| Mean confidence when correct | 0.9382 | 0.9760 | 0.8213 |
+| Mean confidence when wrong | 0.8803 | 0.9427 | **0.7378** |
+| Separation | 0.0579 | 0.0332 | **0.0835** |
 
 ![Reliability diagram](../figures/calibration_reliability.png)
 
-**GFNet is almost twice as well calibrated as the baseline.** Its calibration
-error is 0.0934 against 0.1812, and its worst single bin is out by 0.159 and not
-by 0.260. GFNet is also less overconfident in absolute terms. When GFNet is
-wrong it claims 75% certainty, not 88%.
+**The recommended GFNet is three times better calibrated than the baseline.**
+Its calibration error is 0.0614 against 0.1812, and its worst single bin is out
+by 0.111 rather than 0.260. When it is wrong it claims 74% certainty rather
+than 88%.
 
-This is the clearest result in the report, and it goes against the accuracy
-comparison. The baseline predicts better. GFNet has the better idea of what it
-does not know.
+**The accuracy build is the worst calibrated model in the project**, and it is
+the most accurate at slice level. That is the trade-off this report is about.
+Its ten most confident mistakes all sit at exactly 1.0000. Five patients it
+says certainly do not have Alzheimer's who do, and five it says certainly do
+who do not.
 
-**Even so, you cannot automate on either confidence score.** The separation
-between right and wrong predictions is 0.078 for GFNet. That is 35% better than
-the 0.058 of the baseline. It is still far too small for a threshold to split
-the two groups cleanly.
+What separates the two GFNet builds is mixup, cutmix and label smoothing. The
+accuracy build reaches 0.9954 training accuracy and becomes certain about
+everything, including its errors. The recommended build reaches 0.7759 and
+keeps some doubt.
+
+**Even so, neither confidence score is good enough to automate on.** A
+separation of 0.0835 is the best measured in this project. It is still far too
+small for a threshold to divide the right and wrong populations cleanly.
 
 ![Confidence when right against when wrong](../figures/calibration_confidence.png)
 
-### Temperature scaling
+### Temperature scaling, and when not to use it
 
-Temperature scaling divides the logits by one learned number before the softmax.
-It changes no prediction, so accuracy stays the same. But it can make the
-confidence honest.
+Temperature scaling divides the logits by one learned number before the
+softmax. It changes no prediction, so accuracy stays the same, but it can make
+the confidence honest.
 
 I fit the temperature on the **validation** split. A fit on test, followed by a
 report of test calibration, would be a tune on the test set. That is the same
-mistake that the patient-level split exists to avoid.
+mistake the patient-level split exists to avoid.
 
-| Model | Temperature | ECE before | ECE after | Change | Accuracy |
-|---|---|---|---|---|---|
-| BaselineCNN | 1.20 | 0.1812 | 0.1651 | −8.9% | unchanged |
-| GFNet | 1.11 | 0.0934 | 0.0787 | −15.7% | unchanged |
-
-A temperature above 1 means the model was overconfident. Both models were, and
-both only mildly. Accuracy did not move for either model, which is the expected
-behaviour and a check that the implementation is correct.
-
-GFNet gains more from the fit than the baseline does, at 15.7% against 8.9%. So
-some of the overconfidence of the baseline is structural, and a single global
-scale does not remove it.
-
-**Strong augmentation did most of the work that temperature scaling would have
-done.** I ran the same fit on the normal-augmentation models earlier in the
-project. The numbers were very different.
-
-| Run | Temperature | ECE before | ECE after | Change |
+| Model | Temperature | ECE before | ECE after | Change |
 |---|---|---|---|---|
-| GFNet, normal aug | 1.90 | 0.1819 | 0.1102 | −39% |
-| GFNet, strong aug | 1.11 | 0.0934 | 0.0787 | −16% |
-| BaselineCNN, normal aug | 1.36 | 0.2164 | 0.1963 | −9% |
-| BaselineCNN, strong aug | 1.20 | 0.1812 | 0.1651 | −9% |
+| BaselineCNN | 1.20 | 0.1812 | 0.1651 | −8.9% |
+| GFNet, accuracy build | **4.59** | 0.2231 | 0.1127 | **−49%** |
+| GFNet, recommended | **0.75** | 0.0614 | 0.1056 | **+72%, worse** |
 
-The fitted temperature for GFNet fell from 1.90 to 1.11. A temperature near 1
-means there is little global overconfidence left to remove. Augmentation and
-temperature scaling treat the same problem. Augmentation treats it better,
-because it also raises accuracy, and temperature scaling cannot.
+**A temperature below 1 means the model is underconfident, and scaling it makes
+things worse.** The recommended model's fitted temperature is 0.75, so label
+smoothing at 0.1 slightly overcorrected. Applying temperature scaling to it
+raises its calibration error from 0.0614 to 0.1056.
 
-So the order matters. Fix the training first, then scale the temperature on
-what is left.
+That is a condition I did not have earlier in this project, and it came from a
+measurement rather than from reading about the method. **Temperature scaling
+corrects overconfidence. It is not a general improvement.** Fit the temperature
+on validation, and apply it only if it comes out above 1.
+
+The accuracy build is the case the method was designed for. One scalar cuts its
+calibration error in half, from 0.2231 to 0.1127. Even then it ends up worse
+calibrated than the recommended model is before any scaling at all.
+
+### Accuracy and calibration are not the same axis
+
+Three models, two axes, and they do not agree:
+
+| | Slice accuracy | Calibration error |
+|---|---|---|
+| GFNet, accuracy build | **0.7450** | 0.2231 |
+| BaselineCNN | 0.7421 | 0.1812 |
+| GFNet, recommended | 0.7381 | **0.0614** |
+
+The ordering is exactly reversed. The most accurate model is the least trustworthy, and the most trustworthy is
+the least accurate. 0.7 points separate the extremes on accuracy. A factor of
+3.6 separates them on calibration.
+
+A screening tool routes uncertain cases to a specialist. For that job, a model
+that is certain and wrong is worse than one that is slightly less accurate and
+knows it. That is the reasoning behind the recommendation.
 
 ### Patient-level evaluation
 
@@ -115,29 +130,73 @@ so the mean of those 20 probabilities is the clinically useful read-out.
 
 | Model | Slice | Patient | Gain |
 |---|---|---|---|
-| BaselineCNN | 0.7421 | **0.7511** | +0.9 pts |
-| GFNet | 0.7122 | 0.7444 | **+3.2 pts** |
+| BaselineCNN | 0.7421 | 0.7511 | +0.9 pts |
+| GFNet, accuracy build | 0.7450 | 0.7578 | +1.3 pts |
+| **GFNet, recommended** | 0.7381 | **0.7689** | **+3.1 pts** |
 
-GFNet gains more than three times as much from the mean. That tells us something
-about the shape of the errors of each model. You can see the shape when you
-count how each patient fails.
+**The ordering changes between the two columns.** The accuracy build leads at
+slice level and the recommended build leads at patient level by 1.1 points.
+Averaging the 20 slices is worth three times more to the recommended model.
 
-| Model | All 20 slices correct | All 20 slices wrong |
-|---|---|---|
-| BaselineCNN | 226 | 40 |
-| GFNet | 157 | **28** |
+That difference says something about the shape of each model's errors, and you
+can see the shape by counting how each patient fails:
+
+| Model | All 20 slices wrong |
+|---|---|
+| BaselineCNN | 40 |
+| GFNet, accuracy build | 40 |
+| **GFNet, recommended** | **31** |
 
 The mean only helps a patient whose slices disagree with each other. In the
-all-wrong group the model has a consistent and confident misread of the anatomy
-of that person. No mean fixes that.
+all-wrong group the model has a consistent, confident misread of that person's
+anatomy, and no amount of averaging fixes it.
 
-**GFNet gets all 20 slices wrong for 30% fewer patients: 28 against 40.** A
-patient who is wrong on all 20 slices is a patient the system gets wrong every
-time. There is no internal disagreement to flag the case for review. That is a
-real safety property, and GFNet holds it with a lower slice accuracy.
+**The recommended model gets all 20 slices wrong for 31 patients against 40.**
+A patient wrong on all 20 slices is one the system gets wrong every time, with
+no internal disagreement to flag the case for review. That is a real safety
+property, and it is why the model with the lower slice accuracy is the one this
+report recommends.
 
-The 3.0-point gap in slice accuracy falls to 0.7 points once you evaluate the
-way a clinic would.
+### Where the two architectures fail together
+
+Counting the overlap separates a hard scan from a weakness of one architecture.
+
+| Group | Patients |
+|---|---|
+| Wrong on all 20 slices, baseline only | 17 |
+| Wrong on all 20 slices, GFNet only | 8 |
+| Wrong on all 20 slices, **both** | **23** |
+| Either model fails completely | 48 of 450 |
+
+**23 patients, 5.1% of the test set, defeat both architectures.** A
+convolutional network and a frequency-domain network read an image in
+completely different ways and still agree on every slice of all 23.
+
+That sets a floor. No ensemble of these two can rescue them. The other 25 failures are specific to one architecture. That is why
+disagreement between the two is a usable referral signal, even though averaging
+them is not.
+
+### Averaging the two models is a bad trade
+
+| | Slice | Patient | All 20 slices wrong |
+|---|---|---|---|
+| BaselineCNN | 0.7421 | 0.7511 | 40 |
+| GFNet, recommended | 0.7381 | **0.7689** | **31** |
+| Even-split ensemble | **0.7518** | 0.7644 | 48 |
+
+The ensemble produces the best slice accuracy in the project, 0.7518. It also
+loses patient accuracy to GFNet alone and raises the number of patients wrong
+on every slice from 31 to 48, a 55% increase.
+
+Averaging a model that hedges against one that does not pushes the hedging
+model's borderline-correct slices over the line. Buying 1.4 slice points by
+making the worst failures half again as common is the opposite of what a
+screening tool needs.
+
+A note on method. Sweeping the mixing weight finds 0.7778 at patient level with
+90% weight on GFNet. That weight was chosen by looking at the test split, so it
+is not a result and this report does not claim it. The even split needs no
+fitting, which is why it is the one reported.
 
 ### The reject option
 

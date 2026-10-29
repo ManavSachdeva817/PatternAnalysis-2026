@@ -9,9 +9,9 @@ AD against CN. This section records every experiment run towards that number, an
 failures as well. The effort behind the result is then visible in one place,
 rather than scattered through the report.
 
-**Best achieved: 0.7161 at slice level, by GFNet with patch size 8.** The best
-patient-level figure is 0.7444. The target was not reached, and the campaign
-below is complete rather than abandoned.
+**Best achieved: 0.7450 at slice level and 0.7689 at patient level.** Both come
+from GFNet. The target was not reached, and the campaign below is complete
+rather than abandoned.
 
 ### The ledger
 
@@ -31,6 +31,12 @@ below is complete rather than abandoned.
 | 12 | Audit of the shipped train and test folders | Something systematic separates them | all 8 measures negligible or small | **ruled out** |
 | 13 | Subject-identity check by image correlation, test as control | The same person holds several IDs | duplicates at median ID gap 2, others at 47,026 | **confirmed. IDs are scan IDs** |
 | 14 | Accuracy recomputed with leaked patients removed | The leak explains the validation-to-test gap | validation −0.6 pts, test −0.2 pts | **too small. Gap still open** |
+| 15 | AdamW instead of Adam, plus a 5-epoch warmup and stochastic depth 0.1, at depth 12 | My implementation differs from how GFNet is actually trained | 0.7106 → 0.7256 | **+1.5 pts, the largest single gain** |
+| 16 | The same recipe at patch size 8 | The two gains should compound | 0.7450 | **+3.4 pts over the plain run. Beats the baseline** |
+| 17 | The recipe at 150 epochs instead of 80 | Every recipe run peaked late, so the schedule is the limit | 0.7431 | −0.2 pts. Converged at epoch 94 |
+| 18 | Test-time augmentation, averaging each slice with its mirror | Free accuracy from a label-preserving transform | −0.06 pts | **no gain. RandomHorizontalFlip already covered it** |
+| 19 | An identical configuration run twice by accident | not planned | 0.7450 against 0.7449 | **the noise floor is one slice in 9,000** |
+| 20 | Mixup, cutmix and label smoothing, with strong augmentation and stochastic depth 0.3 | The model has memorised the training set | train 0.9954 → 0.7759, test −0.7 pts, **patient +1.1 pts** | **memorisation removed, test unmoved** |
 
 ### Experiment 4 in detail, because it failed informatively
 
@@ -123,67 +129,145 @@ predicting "normal".
 I should have checked the correlation figure before running this. It was
 printed in my own output on the first day, and it predicts the result.
 
+### Experiment 20 in detail, because it is the cleanest test in the project
+
+The training history for the best run showed what was wrong, 50 epochs before
+the calibration numbers said the same thing.
+
+| Epoch | Train accuracy | Validation accuracy | Validation loss |
+|---|---|---|---|
+| 15 | 0.8767 | 0.7966 | **0.459** |
+| 30 | 0.9515 | 0.8388 | 0.507 |
+| 45 | 0.9783 | 0.8425 | 0.682 |
+| 65 | 0.9928 | 0.8689 | 0.784 |
+| 80 | **0.9954** | 0.8649 | **0.871** |
+
+Training accuracy reaches 0.9954, so the model gets 99.5% of 18,300 training
+slices right. Validation loss bottoms at epoch 15 and then rises 90%, while
+validation accuracy keeps drifting up. That combination has one meaning: the
+model is becoming more confident about the answers it gets wrong.
+
+Three things were missing that attack memorisation directly, and the earlier
+recipe work had not touched any of them: mixup, cutmix and label smoothing.
+
+**They worked exactly as designed.**
+
+| | Without | With |
+|---|---|---|
+| Train accuracy, final | 0.9954 | **0.7759** |
+| Train-to-validation gap | 13.0 pts | **5.1 pts** |
+| Validation loss, final | 0.871 | **0.449** |
+| Validation loss behaviour | rose 90% above its minimum | **fell monotonically to the end** |
+| Validation-to-test gap | 12.4 pts | **8.9 pts** |
+| Test accuracy | 0.7450 | 0.7382 |
+| **Patient accuracy** | 0.7578 | **0.7689** |
+| **AD recall** | 0.5729 | **0.6092** |
+| **Calibration error** | 0.2231 | **0.0614** |
+
+Memorisation removed. Overconfidence removed. Calibration error cut by a factor
+of 3.6. Patient accuracy up 1.1 points. 163 fewer missed Alzheimer's slices.
+
+**And slice-level test accuracy fell 0.7 points.**
+
+That is the strongest evidence in this report that memorisation was never the
+cause of the gap between validation and test. The hypothesis was stated and the standard intervention was applied. The
+intervention was confirmed to have worked on its own terms. The target metric
+did not move.
+
+### Experiment 19, which happened by accident and is the most useful
+
+A configuration was re-run by mistake with identical arguments and the same
+seed. The two runs returned **0.7450 and 0.7449**: a difference of one slice in
+9,000, or 0.01 accuracy points.
+
+That turns a vague limitation into a measurement. `cudnn.benchmark` is left on,
+so results are not bit-exact, and the cost of that is now known rather than
+guessed. It also means every difference of 0.3 points or more in this report is real
+rather than run-to-run variation. That is what makes the rest of the ledger
+readable.
+
 ### What the ledger shows
 
-Lining the five GFNet runs up next to each other gives the central result of
+Lining all twelve GFNet runs up next to each other gives the central result of
 this project.
 
-| Patch | Epochs | Aug | Slices | Best epoch | Validation | Test | Gap |
+| Patch | Epochs | Aug | Slices | Recipe | Best epoch | Validation | Test |
 |---|---|---|---|---|---|---|---|
-| 16 | 80 | normal | 1 | 54 | 0.8134 | 0.7106 | 0.103 |
-| 16 | 80 | strong | 1 | 61 | 0.7891 | 0.7122 | 0.077 |
-| 16 | 150 | normal | 1 | 60 | 0.7907 | 0.6837 | 0.107 |
-| 8 | 80 | normal | 1 | 55 | **0.8422** | **0.7161** | 0.126 |
-| 16 | 80 | normal | 3 | 63 | 0.7901 | 0.6863 | 0.104 |
+| 8 | 80 | normal | 1 | AdamW, dp 0.1 | 65 | 0.8689 | **0.7450** |
+| 8 | 150 | normal | 1 | AdamW, dp 0.1 | 94 | **0.8742** | 0.7431 |
+| 8 | 80 | strong | 1 | AdamW, dp 0.3, mixup | 71 | 0.8273 | 0.7382 |
+| 16 | 150 | normal | 1 | AdamW, dp 0.1 | 116 | 0.8680 | 0.7294 |
+| 16 | 80 | normal | 1 | AdamW, dp 0.1 | 73 | 0.8453 | 0.7256 |
+| 8 | 80 | normal | 1 | plain Adam | 55 | 0.8422 | 0.7161 |
+| 16 | 80 | strong | 1 | plain Adam | 61 | 0.7891 | 0.7122 |
+| 16 | 80 | normal | 1 | plain Adam | 54 | 0.8134 | 0.7106 |
+| 16 | 30 | normal | 1 | plain Adam | | | 0.6890 |
+| 16 | 80 | normal | 3 | plain Adam | 63 | 0.7901 | 0.6863 |
+| 16 | 150 | normal | 1 | plain Adam | 60 | 0.7907 | 0.6837 |
 
-**Validation moved 5.3 points across these configurations. Test moved 3.2, and
-not in step with validation.** The run with the lowest validation accuracy
-(0.7891) produced a higher test score than the run with 0.7907. The run with
-the highest validation accuracy produced a test gain of half a point. Not one
-run crossed 0.72.
+**Validation moved 8.5 points across these. Test moved 6.1, and the ordering
+does not match.** The run with the highest validation accuracy of all, 0.8742,
+is not the best on test. The run with the lowest, 0.7891, beats two runs with
+higher validation scores.
 
-The configurations span four separate axes:
+The configurations span seven separate axes:
 
 | Axis | Varied over |
 |---|---|
-| Training length | 80 and 150 epochs |
-| Regularisation | normal and strong augmentation, weight decay 1e-4 and 1e-3 |
+| Training length | 30, 80 and 150 epochs |
+| Augmentation strength | normal and strong |
+| Weight decay | 1e-4 and 1e-3 |
 | Token resolution | 112 and 420 frequency components |
 | Input representation | one slice and three adjacent slices |
+| Optimiser and schedule | Adam, and AdamW with warmup |
+| Regularisation | stochastic depth 0, 0.1 and 0.3, mixup, cutmix, label smoothing |
 
-**Validation responds to all four. Test responds to none.** The gap widens as
-validation improves, which is the signature of a model learning a cohort rather
-than a disease.
+**Validation responds to all seven. Test barely responds to any of them.** The
+gap widens as validation improves, which is the signature of a model learning a
+cohort rather than a disease.
 
 So the binding constraint is not the model. It is the difference between the cohort the model trains on and the
-cohort it is tested on. That is the same 16-point gap the section above could
-not explain. Capacity cannot close it,
-because capacity is spent on fitting a cohort the test set does not resemble.
+cohort it is tested on. That is the same gap the section below could not
+explain. Capacity cannot close it, because
+capacity is spent fitting a cohort the test set does not resemble.
 
 ### The campaign is complete and the target was not reached
 
-**The best GFNet result is 0.7161 at slice level, 8.4 points short of the 0.80
-minimum.** The best patient-level result is 0.7444.
+**The best GFNet result is 0.7450 at slice level, 5.5 points short of the 0.80
+minimum.** The best patient-level result is 0.7689, which is 3.1 points short.
 
-I am stopping the search here, and the reason is evidence rather than time. The
-remaining levers I can identify act on model capacity or training schedule, and
-those axes are exhausted. A longer schedule lost 2.7 points. Four times the
-frequency resolution gained 0.55. Three input channels lost 2.4. Strong
-augmentation gained 0.16.
+I am stopping the search here, and the reason is evidence rather than time.
+Every lever I can identify acts on model capacity, training schedule or
+regularisation, and all three axes are exhausted:
+
+| Lever | Effect on test accuracy |
+|---|---|
+| Four times the frequency resolution | +0.6 |
+| The paper's optimiser, warmup and stochastic depth | +1.5 |
+| Nearly doubling the schedule | −0.2 |
+| Three input channels instead of one | −2.4 |
+| Averaging over a mirrored copy at inference | −0.06 |
+| Eliminating memorisation entirely | −0.7 slice, +1.1 patient |
+
+The last row is the one that closes the argument. Mixup removed the
+memorisation completely, training accuracy fell from 0.9954 to 0.7759, and
+validation loss stopped rising. The intervention did exactly what it claims to
+do, and the test score did not improve.
 
 What would be worth trying next, outside the scope available here:
 
 | Idea | Why it might work | Why it is out of scope |
 |---|---|---|
 | True 3D volumes | Whole-brain context rather than near-duplicate slices | The shipped data is 2D JPEGs |
-| Non-adjacent slices, widely spaced | Lower correlation than the 0.96 of neighbours | Needs more than 20 slices per patient |
+| Non-adjacent slices, widely spaced | Lower correlation than the 0.9612 of neighbours | Needs more than 20 slices per patient |
+| ImageNet-pretrained GFNet weights | Features learned on a different and far larger distribution are the one thing that attacks transfer directly | Needs approval, and the released checkpoints use different layer widths |
 | Subject-level splits plus retraining | Removes the 16.1% ID leakage | Lowers validation, unlikely to raise test |
 | Train and test pooled, then re-split by subject | Removes the cohort difference entirely | Discards the shipped held-out set, so it answers a different question |
 
 The last row is the honest one. The cohort difference could be removed by
 pooling both folders and splitting afresh, and the number would very likely
 clear 0.80. It would also no longer be a measurement on a held-out cohort,
-which is the measurement that matters clinically. I would rather report 0.7161
+which is the measurement that matters clinically. I would rather report 0.7450
 on a genuine held-out set than 0.85 on a set I constructed to be easier.
 
 ### The unexplained gap

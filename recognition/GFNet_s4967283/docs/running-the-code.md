@@ -40,6 +40,8 @@ PatternAnalysis-2026/
         ├── run_smoke.sh              SLURM, two epochs, run before any full job
         ├── run_train.sh              SLURM, full run. Args: model seed epochs aug
         ├── run_figures.sh            SLURM, rebuilds every figure from checkpoints
+        ├── run_recipe_figures.sh     SLURM, same but for a depth-12 patch-8 checkpoint
+        ├── run_tta.sh                SLURM, measures what test-time augmentation buys
         │
         └── figures/
             ├── fig1_class_comparison.png        Example slices, AD against NC
@@ -278,15 +280,19 @@ warning, which is expected there and harmless.
 ### 5. Train
 
 ```bash
-# Arguments: model seed epochs augmentation patch slices
+# Arguments, in order:
+#   MODEL SEED EPOCHS AUG PATCH SLICES DEPTH DROPPATH WARMUP OPTIM MIXUP SMOOTH
+
+# The baseline
 sbatch run_train.sh baseline 42 80 strong
-sbatch run_train.sh gfnet 42 80 strong
 
-# Patch size 8 gives a 28x28 token grid instead of 14x14
-sbatch run_train.sh gfnet 42 80 normal 8
+# The two GFNet builds this report compares
+sbatch run_train.sh gfnet 42 80 normal 8 1 12 0.1 5 adamw
+sbatch run_train.sh gfnet 42 80 strong 8 1 12 0.3 5 adamw 0.8 0.1
 
-# 2.5D: the slice plus its two neighbours, stacked as three channels
+# Other configurations from the ledger
 sbatch run_train.sh gfnet 42 80 normal 16 3
+sbatch run_train.sh gfnet 42 150 normal 8 1 12 0.1 5 adamw
 ```
 
 Expected output from `sbatch`:
@@ -333,9 +339,26 @@ Wrote:
   outputs_gfnet_seed42_normal/summary_gfnet.json
 ```
 
-**Check:** seconds per epoch tells you the job is healthy. Expect about 14 for
-either model at patch 16, about 42 at patch 8, and about 40 with three slice
-channels. A figure far above those means the data loader is starving the GPU.
+**Check:** seconds per epoch tells you the job is healthy.
+
+| Configuration | Seconds per epoch |
+|---|---|
+| Either model at patch 16, depth 8 | about 14 |
+| Patch 8, depth 8 | about 42 |
+| Patch 16, three slice channels | about 34 |
+| Patch 8, depth 12, the builds this report uses | about 62 |
+
+A figure far above these means the data loader is starving the GPU.
+
+**The arguments that change the model's shape are `--patch-size` and
+`--depth`.** Both must be repeated to `predict.py` when loading a checkpoint,
+or the weights will not fit and the load fails. That failure is deliberate. A
+silent fallback would fill the missing blocks with random weights and produce a
+plausible-looking figure set.
+
+The arguments that change only training are `--augmentation`, `--drop-path`,
+`--warmup-epochs`, `--optimiser`, `--mixup` and `--label-smoothing`. None of
+them need repeating at inference.
 
 The output folder is named from the arguments. Patch 16 with one slice keeps
 the plain name, and anything else gets a `_p<size>` or `_s<slices>` suffix, so
@@ -345,7 +368,8 @@ runs never overwrite each other.
 
 ```bash
 python predict.py --model gfnet \
-  --checkpoint outputs_gfnet_seed42_strong/best_gfnet.pt --output-dir figures
+  --checkpoint outputs_gfnet_seed42_strong_p8_recipe_mix/best_gfnet.pt \
+  --patch-size 8 --depth 12 --output-dir figures
 ```
 
 Expected output:

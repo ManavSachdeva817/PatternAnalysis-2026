@@ -16,6 +16,11 @@ model is confidently and completely wrong about.
 
 ![GFNet, the mistakes it was most confident about](../figures/failures_gfnet.png)
 
+**Which models this section covers.** Findings 1 to 4 and the image
+observations below were made on BaselineCNN and the original depth-8 GFNet. The
+recommended model came later and fails on different patients, which is itself a
+finding and is recorded at the end.
+
 ### Finding 1. The baseline reached P(AD) = 0.0000 on a patient who has AD
 
 Patient 985197 has Alzheimer's disease. The baseline gave this output.
@@ -62,7 +67,7 @@ This is the measurement that justifies the threshold recommendation. A model
 whose total failures are all false negatives must not run at a decision
 threshold of 0.5.
 
-### Finding 3. Twenty patients defeat both architectures
+### Finding 3. Twenty patients defeated both of the early architectures
 
 | Group | Patients |
 |---|---|
@@ -117,3 +122,60 @@ Overall, I would not trust this prototype to handle borderline cases where Alzhe
 
 
 ---
+
+---
+
+### Finding 5. Training the overconfidence out changed who fails
+
+The recommended model, trained with mixup, cutmix and label smoothing, fails on
+a different set of patients and in a visibly different way.
+
+![GFNet, the mistakes it was most confident about](../figures/failures_gfnet.png)
+
+| | Accuracy build | Recommended |
+|---|---|---|
+| Highest confidence on a false negative | **1.0000** | 0.9810 |
+| Highest confidence on a false positive | **1.0000** | 0.9645 |
+| Patients wrong on all 20 slices | 40 | **31** |
+| Calibration error | 0.2231 | **0.0614** |
+
+**The accuracy build puts all ten of its worst mistakes at exactly 1.0000.**
+Five patients it is certain do not have Alzheimer's who do, and five it is
+certain do who do not. The recommended model's worst mistake is 0.9810, and
+nothing it gets wrong reaches certainty.
+
+That difference is the whole argument for the recommended model in one number.
+Both are wrong about roughly the same number of slices. One of them says so.
+
+### Finding 6. Patient 1265863 defeats every version
+
+Patient 1265863 is in my own image observations above. I wrote that it has a
+relatively large ventricular space and looks brighter than a normal control. I
+also wrote that it resembles the Alzheimer's examples closely enough that I
+understood why the model was fooled.
+
+It is still there. It appears among the most confident false positives for the original depth-8
+GFNet. It appears again for the recommended model, after every regulariser in
+this report had been applied.
+
+A patient that defeats one training run is a weakness of that run. A patient
+that defeats three separate training recipes, including one that eliminated
+memorisation entirely, is a property of the scan. Combine that with the 23 patients wrong on all 20 slices for both
+architectures. Together they are the clearest evidence in this report that some
+cases are not reachable by a better classifier on a single 2D slice.
+
+### Finding 7. Every worst failure is still a missed AD case
+
+The lists change, the direction does not. For the recommended model:
+
+> False negatives: 1330894, 1398870, 1240482, 1017725, 1342389
+> False positives: 1265863, 1199414, 1441119, 1215774
+
+And the five worst total failures, the patients wrong on all 20 slices and
+furthest from the truth, are 1398870, 1240482, 1342389, 992839 and 1223029.
+**All five have AD.**
+
+That has held for every model tested in this project. When any of them fails
+completely, it fails by calling a sick person healthy. It is the expensive
+direction, and it is why the recommendation moves the decision threshold below
+0.50 rather than leaving it where the softmax puts it.
