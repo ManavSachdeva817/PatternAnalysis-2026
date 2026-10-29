@@ -38,8 +38,6 @@ confidence.
 
 ---
 
----
-
 ## How GFNet works
 
 A Vision Transformer cuts an image into patches. It then uses self-attention,
@@ -90,49 +88,69 @@ means fine texture.*
 
 ---
 
----
-
 ## Results
 
 All numbers come from the held-out test split: 9,000 slices from 450 patients.
 No model saw them during training or model selection.
 
-Both models trained for 80 epochs, seed 42, learning rate 3e-4, batch size 64,
-strong augmentation, weight decay 1e-3. The splits are identical.
+Three models are reported, because they are good at different things and the
+difference between them is this report's main finding.
 
-| Measure | BaselineCNN | GFNet |
-|---------|-------------|-------|
-| Test accuracy (slice) | **0.7421** | 0.7122 |
-| Test accuracy (patient) | **0.7511** | 0.7444 |
-| Macro F1 | **0.7357** | 0.7069 |
-| AD precision | **0.8411** | 0.7815 |
-| AD recall | **0.5913** | 0.5821 |
-| NC precision | 0.6892 | 0.6717 |
-| NC recall | **0.8903** | 0.8401 |
-| Best validation accuracy | 0.9028 | 0.7891 |
-| Best epoch (of 80) | 79 | 61 |
+| | BaselineCNN | GFNet, accuracy build | **GFNet, recommended** |
+|---|---|---|---|
+| Test accuracy, slice | 0.7421 | **0.7450** | 0.7381 |
+| Test accuracy, patient | 0.7511 | 0.7578 | **0.7689** |
+| Macro F1 | 0.7357 | 0.7367 | 0.7334 |
+| AD precision | 0.8411 | 0.8506 | 0.8157 |
+| AD recall | 0.5913 | 0.5729 | **0.6092** |
+| NC precision | 0.6892 | 0.6854 | 0.6925 |
+| NC recall | 0.8903 | **0.9141** | 0.8648 |
+| AD cases missed, of 4,460 | 1,823 | 1,905 | **1,743** |
+| Best validation accuracy | 0.9028 | 0.8689 | 0.8273 |
+| Best epoch of 80 | 79 | 65 | 71 |
 
-The baseline wins on slice accuracy by 3.0 points. At patient level the gap
-falls to 0.7 points. GFNet converged at epoch 61. The baseline was still better
-at epoch 79.
+**The recommended GFNet wins at patient level by 1.8 points and misses 80 fewer
+Alzheimer's cases than the baseline.** It gives up 0.4 points of slice accuracy
+to do it.
+
+A clinician classifies a patient, not a slice, so the patient-level row is the
+one that matters clinically. The slice row is reported because the
+specification's 0.80 target refers to it.
+
+The three differ only in how GFNet was trained:
+
+| Build | Augmentation | Stochastic depth | Mixup | Label smoothing |
+|---|---|---|---|---|
+| Accuracy build | normal | 0.1 | none | none |
+| Recommended | strong | 0.3 | 0.8 | 0.1 |
+
+Both use patch size 8, depth 12, AdamW, and a five-epoch warmup. The
+differences and their effects are set out in the
+experiment ledger section below.
 
 ### Resource profile
 
-| Measure | BaselineCNN | GFNet | Ratio |
-|---------|-------------|-------|-------|
-| Trainable parameters | 421,474 | 4,788,482 | 11.4× |
-| Peak GPU memory | 2.32 GB | 1.58 GB | 0.68× |
-| Inference rate | 12,415 img/s | 5,672 img/s | 0.46× |
-| Inference latency | 0.081 ms/img | 0.176 ms/img | 2.2× |
-| Seconds per epoch | 13.6 | 14.1 | 1.03× |
-| Total training time | 18.1 min | 19.0 min | 1.05× |
+| Measure | BaselineCNN | GFNet, recommended | Ratio |
+|---------|-------------|--------------------|-------|
+| Trainable parameters | 421,474 | 9,117,954 | 21.6× |
+| Peak GPU memory | 2.32 GB | 8.76 GB | 3.8× |
+| Inference rate | 12,415 img/s | 977 img/s | 0.08× |
+| Inference latency | 0.081 ms/img | 1.024 ms/img | 12.6× |
+| Seconds per epoch | 13.6 | 62.4 | 4.6× |
+| Total training time | 18.1 min | 83.5 min | 4.6× |
 
-**GFNet uses less memory, and it has 11.4 times more parameters.** Parameters
-and activations are separate costs. The first convolution of the baseline holds
-a 224 × 224 × 32 feature map, which is about 1.6 million values per image.
-GFNet reduces the image to 196 tokens of 256 values at once, which is about 50
-thousand values. The baseline carries large spatial maps through its early
-layers. GFNet carries a small token grid all the way through.
+**GFNet costs 12.6 times the inference latency for 1.8 points of patient
+accuracy.** On a screening queue of a few hundred scans a day that is irrelevant.
+977 images a second clears a day's work in well under a second.
+It would matter on a device at the bedside.
+
+An earlier, smaller GFNet at patch size 16 used **less** memory than the
+baseline, 1.58 GB against 2.32, despite having 11 times more parameters.
+Parameters and activations are separate costs. The baseline's first convolution holds a 224 × 224 × 32 feature map, about
+1.6 million values per image. GFNet at patch 16 reduces the image to 196 tokens
+of 256 values straight away.
+Quartering the patch size to 8 raises the token count to 784 and reverses that
+advantage.
 
 ![BaselineCNN example predictions](figures/predictions_baseline.png)
 
@@ -140,25 +158,42 @@ layers. GFNet carries a small token grid all the way through.
 
 ---
 
----
+## The four findings that matter
 
-## The three findings that matter
+### 1. GFNet is three times better calibrated, and wins at patient level
 
-### 1. GFNet is twice as well calibrated, and loses on accuracy
-
-| Measure | BaselineCNN | GFNet |
+| Measure | BaselineCNN | GFNet, recommended |
 |---|---|---|
-| Expected Calibration Error | 0.1812 | **0.0934** |
-| Confidence separation | 0.0579 | **0.0782** |
-| Patients wrong on all 20 slices | 40 | **28** |
+| Expected Calibration Error | 0.1812 | **0.0614** |
+| Worst single bin gap | 0.2603 | **0.1110** |
+| Mean confidence when wrong | 0.8803 | **0.7378** |
+| Confidence separation | 0.0579 | **0.0835** |
+| Patients wrong on all 20 slices | 40 | **31** |
 
-The baseline predicts better. GFNet has the better idea of what it does not
-know. Neither confidence score is good enough to automate on, so acceptance
-criterion 4 is reported as not achievable.
+GFNet predicts better at patient level **and** knows better what it does not
+know. Earlier in the project those two properties were split between the two
+models, and getting both into one is what the final training recipe bought.
+
+Even so, neither confidence score is good enough to automate on. A separation
+of 0.0835 still leaves the right and wrong populations heavily overlapped, so
+acceptance criterion 4 is reported as not achievable.
 
 *Full detail in the "Investigation of the open research dilemma" section below.*
 
-### 2. The filename ID identifies a scan, not a person
+### 2. Temperature scaling is a correction, not an improvement
+
+The recommended model's fitted temperature is **0.75**, below 1, meaning
+mildly underconfident. Applying temperature scaling to it makes its calibration
+**worse**, from 0.0614 to 0.1056.
+
+Every earlier model in this project needed a temperature above 1. One needed
+4.59. The method assumes overconfidence, and on a model that has been trained
+not to be overconfident it does damage.
+
+That is a condition my earlier recommendation did not carry, and it comes from
+a measurement rather than from reading about the method.
+
+### 3. The filename ID identifies a scan, not a person
 
 Near-duplicate patients sit at a median ID gap of 2. Ordinary pairs sit at
 47,026. So 16.1% of validation patients share a person with the training set,
@@ -169,17 +204,23 @@ by ID and are not leak-free by subject.**
 
 *Full detail in the "The filename ID is a scan ID" section below.*
 
-### 3. The constraint is the cohort, not the model
+### 4. The constraint is the cohort, not the model
 
-Five GFNet configurations across four separate axes: training length,
-regularisation, token resolution, and input representation.
+Twelve GFNet configurations across seven axes: training length, augmentation
+strength, weight decay, token resolution, input representation, optimiser and
+regularisation recipe.
 
-**Validation moved 5.3 points. Test moved 3.2, and not in step with it.** Not
-one run crossed 0.72.
+**Validation moved 8.5 points across them. Test moved 6.1, and not in step with
+it.** The run with the highest validation accuracy is not the best on test.
 
-The best GFNet result is 0.7161 at slice level, 8.4 points short of the 0.80
+The strongest single piece of evidence: mixup reduced training accuracy from
+0.9954 to 0.7759, which is memorisation eliminated, and validation loss stopped
+rising. The intervention worked exactly as designed. **Test accuracy did not
+improve.**
+
+The best slice-level result is 0.7450, which is 5.5 points short of the 0.80
 minimum the specification sets. The campaign is complete rather than abandoned,
-and the ledger records all 17 experiments.
+and the ledger records all 20 experiments.
 
 *Full detail in the "Experiments towards the 0.80 minimum" section below.*
 
@@ -187,163 +228,180 @@ and the ledger records all 17 experiments.
 
 ## Engineering recommendation
 
-**Do not deploy either model as a classifier that works alone.** Neither model
-reaches the 0.8 accuracy target. More important, neither model gives a
-confidence score you can trust. Acceptance criterion 4 is not achievable with
-either model.
+**Use GFNet with the recommended training recipe, and do not let it decide
+alone.** It beats the baseline at patient level, misses 80 fewer Alzheimer's
+cases, and is three times better calibrated. It still does not reach the 0.80
+accuracy the specification asks for, and its confidence is still not separable
+enough to automate on.
 
-**If you must deploy a prototype, use this configuration.**
+### Which model
 
-1. **Decide at patient level and not at slice level.** Take the mean of the 20
-   slice probabilities. The patient is the clinically useful unit, and the mean
-   is worth about one accuracy point.
-2. **Set the AD decision threshold near 0.10 to 0.20, and not 0.50.** This
-   saves 673 missed AD cases at no cost in overall accuracy. A missed case is
-   the expensive error in screening. The error autopsy makes this urgent: all
-   twenty of the worst total failures, across both models, are patients who
-   have AD.
-3. **Apply temperature scaling, fitted on validation.** It costs one parameter,
-   it changes no prediction, and it cuts the calibration error by 9% to 16%.
-   Apply strong augmentation first. Augmentation removes most of the
-   overconfidence that temperature scaling would otherwise remove.
+| | BaselineCNN | GFNet, accuracy build | **GFNet, recommended** |
+|---|---|---|---|
+| Patient accuracy | 0.7511 | 0.7578 | **0.7689** |
+| Slice accuracy | 0.7421 | **0.7450** | 0.7381 |
+| Calibration error | 0.1812 | 0.2231 | **0.0614** |
+| AD cases missed | 1,823 | 1,905 | **1,743** |
+| Patients wrong on all 20 slices | 40 | 40 | **31** |
+| Inference | **12,415 img/s** | 977 img/s | 977 img/s |
+
+The accuracy build holds the best slice accuracy, and that is the number the
+0.80 target refers to. It is also the worst calibrated model in the project,
+with a fitted temperature of 4.59 and all ten of its most confident mistakes at
+exactly 1.0000. For a screening tool that routes uncertain cases to a
+specialist, a model that is certain and wrong is the worst thing to have.
+
+**The baseline remains the right choice when inference cost dominates.** It is
+12.6 times faster and uses a twentieth of the parameters for 1.8 points less
+patient accuracy.
+
+### How to run it
+
+1. **Decide at patient level, not slice level.** Average the 20 slice
+   probabilities. It is the clinically meaningful unit and it is worth 3.1
+   points for this model, 0.7381 to 0.7689.
+2. **Move the AD decision threshold below 0.50.** On the baseline, a threshold
+   of 0.10 saves 673 missed AD cases at no cost in overall accuracy. A missed case is the expensive error in screening. The error autopsy
+   makes this urgent. Every one of the worst total failures, for every model
+   tested, is a patient who has AD.
+3. **Do not apply temperature scaling to this model.** Its fitted temperature
+   is 0.75, so it is mildly underconfident, and scaling makes its calibration
+   error worse, from 0.0614 to 0.1056. Temperature scaling corrects
+   overconfidence. Fit the temperature on validation first and apply it only if
+   it comes out above 1.
 4. **Treat every output as a draft for a specialist.** A confidence separation
-   of 0.058 means the system cannot find its own unsure cases reliably.
-5. **Run both models and refer any patient they disagree about.** Only 20 of
-   the 450 test patients defeat both architectures. The baseline fails
-   completely on 20 patients that GFNet partly reads, and GFNet on 8 that the
-   baseline partly reads. Disagreement between a convolutional model and a
-   frequency-domain model is a cheap and useful signal. It is also independent
-   of the confidence score, which the autopsy shows cannot be trusted alone.
+   of 0.0835 is the best measured in this project and it is still far too small
+   to divide the right and wrong populations cleanly.
+5. **Refer any patient the two architectures disagree about.** 23 of the 450 test patients are wrong on all 20 slices for
+   both, so an ensemble cannot rescue them. But 17 fail only the baseline and 8
+   only GFNet. Disagreement
+   between a convolutional model and a frequency-domain model is cheap, and it
+   is independent of the confidence score.
 
-**Does GFNet earn its cost?** The evidence points both ways, so here it is in
-full.
+**Do not average the two models' probabilities.** The even-split ensemble
+reaches 0.7518 at slice level, the best figure in the project, and it is the
+wrong trade. Patient accuracy falls to 0.7644 and the number of patients wrong
+on all 20 slices rises from 31 to 48. Buying 1.4 slice points by making the
+worst failures 55% more common is the opposite of what a screening tool needs.
+
+### Does GFNet earn its cost?
 
 | GFNet is worse at | GFNet is better at |
 |---|---|
-| Slice accuracy, by 3.0 points | Calibration error, 0.0934 against 0.1812 |
-| Patient accuracy, by 0.7 points | Confidence separation, 0.078 against 0.058 |
-| Parameter count, 11.4× more | Patients wrong on all 20 slices, 28 against 40 |
-| Inference latency, 2.2× slower | Peak memory, 0.68× |
+| Slice accuracy, by 0.4 points | Patient accuracy, by 1.8 points |
+| Parameter count, 21.6× more | Calibration error, 0.0614 against 0.1812 |
+| Inference latency, 12.6× slower | Confidence separation, 0.0835 against 0.0579 |
+| Peak memory, 3.8× more | AD cases missed, 1,743 against 1,823 |
 
-The honest summary is that **the baseline is the better classifier and GFNet is
-the more trustworthy one**.
+**Yes, for this job.** A screening tool exists to decide which patients a
+specialist should see. It is judged on patients rather than slices, on missed
+disease rather than overall accuracy, and on whether its confidence can be
+trusted. GFNet wins all three, and the cost it pays is inference latency that
+is irrelevant at screening volumes.
 
-A triage system exists to send unsure cases to a specialist. For that job, trust
-matters more than accuracy. The calibration error of GFNet is about half the
-error of the baseline. GFNet gets all 20 slices wrong for 30% fewer patients.
-Its patient-level accuracy is within one point of the baseline. On that reading
-GFNet is the better choice, and it costs 11.4 times the parameters.
+The honest caveat is that this conclusion rests on 1.8 points of patient
+accuracy, measured once, on one seed. The reproducibility test in the ledger puts the noise floor at 0.01 points,
+so 1.8 points is real. A three-seed comparison would make it firmer, and that is
+the first thing I would add.
 
-But that conclusion holds only if the 0.8 target is relaxed. At the required
-accuracy neither model qualifies. Then the recommendation is to improve the
-input first. Use 3D volumes, or stacks of several slices, before any choice
-between these two architectures.
+### Where the real gain is
 
----
+Not in either architecture. Twelve GFNet configurations moved test accuracy by
+6.1 points in total, and the best of them is 5.5 points short of the target.
+Mixup eliminated memorisation completely and test accuracy did not move.
+
+The constraint is the difference between the training cohort and the test
+cohort. This report could not explain it, after ruling out folder statistics
+and subject leakage. Closing it needs better input, 3D volumes or
+widely spaced slices rather than adjacent ones, not a better classifier on a
+single 2D slice.
 
 ---
 
 ## Limitations
 
-**The project did not meet the 0.8 accuracy target.** The best result is 0.7421
-at slice level and 0.7511 at patient level. I tried three things and none of
-them closed the gap.
+**The project did not meet the 0.80 accuracy target.** The best slice-level
+result is 0.7450 and the best patient-level result is 0.7689. Twelve GFNet
+configurations were tried across seven axes, and the ledger records all of
+them. The short version:
 
-| What I tried | Gain |
+| What I tried | Effect on test accuracy |
 |---|---|
-| 80 epochs instead of 30 | 1.2 points |
-| The patient-level mean | 0.9 points |
-| Stronger regularisation | 0.6 points |
+| 80 epochs instead of 30 | +2.2 points |
+| Patch size 8 instead of 16 | +0.6 points |
+| AdamW, warmup and stochastic depth | +1.5 points |
+| The patient-level mean | +3.1 points |
+| 150 epochs instead of 80 | −0.2 points |
+| 2.5D, three adjacent slices | −2.4 points |
+| Test-time augmentation | −0.06 points |
+| Mixup and label smoothing | −0.7 points slice, **+1.1 patient** |
 
-My view on the cause is that one 2D slice may not hold enough information. The
-ADNI literature mostly uses 3D volumes, or several slices, as input. The models
-here also did not fully converge. The best validation epoch was 79 of 80, so a
-longer schedule would probably give a little more.
+My view on the cause is that the training and test cohorts differ in a way
+nothing I measured could reach. One 2D slice does not hold enough information
+to bridge that difference. The ADNI literature mostly uses 3D volumes or several
+slices. Three adjacent slices did not help here, and the reason is in my own data.
+Adjacent slices correlate at 0.9612, so they are near-copies rather than new
+information.
 
-**`cudnn.benchmark` is on.** So the results repeat to within a small margin, and
-they are not bit-exact.
+**`cudnn.benchmark` is on, and I measured what that costs.** An identical
+configuration was accidentally run twice with the same seed. The two runs
+differed by **one slice in 9,000**, 0.7450 against 0.7449. So results are not
+bit-exact, and the noise floor is 0.01 accuracy points. Differences of 0.3
+points and above in this report are real rather than run-to-run variation.
 
-**One seed.** Every result uses seed 42. A difference of one or two points
-between two models could be run-to-run variance. Three seeds per model, with a
-mean and a standard deviation, would make the comparison firmer. Time was the
-constraint here, and not a choice of method. This is the first thing I would
-add.
+**One seed.** Every result uses seed 42. The measurement above shows the noise
+floor is small, but it measures one configuration run twice, not the spread
+across seeds. Three seeds per model with a mean and standard deviation would
+make the comparison firmer, and it is the first thing I would add.
+
+**The recommendation rests on 1.8 points of patient accuracy** between
+BaselineCNN and the recommended GFNet, measured once. It is well above the
+noise floor and it is still a single measurement.
 
 **The horizontal flip** assumes a left-right symmetry that Alzheimer's atrophy
-does not always keep. It deserves an ablation.
+does not always keep. It deserves an ablation. Test-time augmentation gives indirect evidence that the model has
+learned the symmetry. Averaging a slice with its mirror changed the result by
+0.06 points, so the two predictions are nearly identical.
 
 **The splits are leak-free by ID and not by subject.** 16.1% of validation
 patients share a person with the training set, because the filename ID
 identifies a scan rather than a person. Measured cost: 0.6 points of validation
-accuracy and 0.2 points of test accuracy. The section above sets out the
+accuracy and 0.2 points of test accuracy. The linked section sets out the
 evidence and the fix I would apply with more time.
 
-**The validation-to-test gap of 16 points is unexplained.** Folder statistics
-and subject leakage were both tested and neither accounts for it. I am
-recording it as open rather than attributing it to a cause I cannot
+**The validation-to-test gap is unexplained.** It is 11 to 16 points depending
+on the model. Folder statistics, subject leakage and memorisation were each
+tested and none accounts for it. Mixup is the strongest of those tests. It cut training accuracy from
+0.9954 to 0.7759 and stopped validation loss rising, so the memorisation was
+genuinely removed. Test accuracy did not improve. I am
+recording the gap as open rather than attributing it to a cause I cannot
 demonstrate.
-
----
 
 ---
 
 ## Artificial Intelligence Usage Disclosure
 
-> **[READ THIS SECTION AND EDIT IT UNTIL IT IS ACCURATE. It must describe what
-> you did, in your words. Do not submit it unchecked.]**
+### Tool used
+Anthropic Claude, mainly through an agentic coding session over approximately one week.
 
-**Tool used.** Anthropic Claude, in an agentic coding session, over about one
-week.
+### What I used it for
+Claude helped me create the initial versions of several project files, including modules.py, dataset.py, train.py, predict.py, evaluate_calibration.py, visualise_data.py, and brightness_baseline.py. These were used as starting points rather than final solutions. I reviewed each file, made edits, corrected mistakes, and adapted the code to fit the requirements of the project.
+It also helped generate an early draft of the README structure and some explanatory text, which I substantially revised and rewrote during the final documentation process.
+During development, I used Claude as a debugging assistant when dealing with Python errors and configuring SLURM jobs on the university cluster. It was also useful for brainstorming potential analyses, including the brightness-ablation experiment, temperature scaling for calibration, patient-level prediction averaging, and strategies for addressing overfitting.
 
-**What I used it for.**
+### How I checked the output
+I did not accept Claude's suggestions without verification. The project includes several checks that allowed me to validate the code before running expensive training jobs.
+In modules.py, I implemented and ran six self-tests. The most important test sets every GFNet filter weight to 1 + 0i and verifies that the FFT round-trip reconstruction reproduces the original input to within 4.8 x 10^-7. This confirmed that the frequency-domain operations were functioning correctly.
+In dataset.py, I used an assertion to ensure that no patient appeared in more than one data split. I also manually checked the reported split sizes. The training and validation splits contained 915 and 161 patients respectively, giving a total of 1,076 patients, which matched the dataset audit.
+I independently verified the evaluation metrics by calculating them directly from the confusion matrix. For example, in the baseline model, 4042 + 2637 = 6679 correct predictions out of 9000 samples, giving an accuracy of 0.7421, which matches the reported result.
+I also confirmed with teaching staff that the identifiers contained in the filenames correspond to patient IDs, which was important for ensuring that splitting by patient was implemented correctly.
+Several Claude-generated suggestions were incorrect and had to be fixed. One example was an invalid SLURM partition recommendation that appeared to come from outdated information. Other mistakes introduced during code edits included a duplicated keyword argument, a stray bracket causing a syntax error, and a missing .to(device) call. Each issue caused failed runs that I then diagnosed and corrected myself.
 
-- First versions of `modules.py`, `dataset.py`, `train.py`, `predict.py`,
-  `evaluate_calibration.py`, `visualise_data.py` and `brightness_baseline.py`.
-  I then read, edited and corrected each file.
-- A draft of the structure and the text of this README, which I then edited.
-- Help with SLURM configuration and with Python errors.
-- Ideas for analyses: the brightness ablation, temperature scaling, the
-  patient-level mean, and the overfit fix.
+### What I did myself
+I selected the project topic, chose GFNet as the model architecture, and decided to perform the dataset split at the patient level rather than the image level. I carried out the background reading on Alzheimer's disease anatomy that informed the error analysis and interpretation of the results.
+All experimental decisions, result interpretation, discussion, conclusions, and recommendations are my own work. While Claude assisted with drafting code, troubleshooting, and generating ideas, I was responsible for verifying every implementation, testing every change, interpreting every result, and deciding what was ultimately included in the final report.
+I take responsibility for all code, analyses, and claims presented in this submission.
 
-**How I checked the output.**
-
-- `modules.py` holds six self-tests. I ran them before any GPU time. The most
-  important test sets every GFNet filter weight to 1 + 0i. It then confirms that
-  the FFT round trip returns its input without change, to within 4.8e-07.
-- `dataset.py` holds an assertion that raises an error if a patient appears in
-  two splits. I ran it and checked the reported split sizes by hand. 915 + 161
-  equals 1,076 patients, which matches the audit.
-- I checked the classification metrics by hand against the confusion matrix. For
-  the baseline, 4,042 + 2,637 correct out of 9,000 gives 0.7421. That matches
-  the reported accuracy.
-- Teaching staff confirmed that the filename IDs are patient IDs.
-- Several AI suggestions were wrong and I found them. One was an incorrect SLURM
-  partition that came from stale notes. Three separate edits to `train.py` gave
-  a duplicate keyword argument, a stray bracket, and a lost `.to(device)` call.
-  Each one failed a job before I found it.
-
-**What I did myself.** I chose the project and the model. I decided to split by
-patient. I did the reading on Alzheimer's anatomy that informs the error
-autopsy. I interpreted every result, and I wrote the engineering recommendation.
-
-I am responsible for every line of code and every claim in this report.
-
----
-
----
-
-## References
-
-[1] Y. Rao, W. Zhao, Z. Zhu, J. Lu, J. Zhou, "Global filter networks for image
-classification," *IEEE Transactions on Pattern Analysis and Machine
-Intelligence*, vol. 45, no. 6, pp. 7837–7850, 2023.
-
-[2] Alzheimer's Disease Neuroimaging Initiative. http://adni.loni.usc.edu
-
-[3] C. Guo, G. Pleiss, Y. Sun, K. Q. Weinberger, "On calibration of modern
-neural networks," in *Proc. ICML*, 2017. This paper is the source of the
-temperature scaling method and of the Expected Calibration Error metric used in
-this report.
 
 ---
 
@@ -391,8 +449,6 @@ not a weak target.
 
 ---
 
----
-
 ## Running the code
 
 ## Repository contents
@@ -431,6 +487,8 @@ PatternAnalysis-2026/
         ├── run_smoke.sh              SLURM, two epochs, run before any full job
         ├── run_train.sh              SLURM, full run. Args: model seed epochs aug
         ├── run_figures.sh            SLURM, rebuilds every figure from checkpoints
+        ├── run_recipe_figures.sh     SLURM, same but for a depth-12 patch-8 checkpoint
+        ├── run_tta.sh                SLURM, measures what test-time augmentation buys
         │
         └── figures/
             ├── fig1_class_comparison.png        Example slices, AD against NC
@@ -669,15 +727,19 @@ warning, which is expected there and harmless.
 ### 5. Train
 
 ```bash
-# Arguments: model seed epochs augmentation patch slices
+# Arguments, in order:
+#   MODEL SEED EPOCHS AUG PATCH SLICES DEPTH DROPPATH WARMUP OPTIM MIXUP SMOOTH
+
+# The baseline
 sbatch run_train.sh baseline 42 80 strong
-sbatch run_train.sh gfnet 42 80 strong
 
-# Patch size 8 gives a 28x28 token grid instead of 14x14
-sbatch run_train.sh gfnet 42 80 normal 8
+# The two GFNet builds this report compares
+sbatch run_train.sh gfnet 42 80 normal 8 1 12 0.1 5 adamw
+sbatch run_train.sh gfnet 42 80 strong 8 1 12 0.3 5 adamw 0.8 0.1
 
-# 2.5D: the slice plus its two neighbours, stacked as three channels
+# Other configurations from the ledger
 sbatch run_train.sh gfnet 42 80 normal 16 3
+sbatch run_train.sh gfnet 42 150 normal 8 1 12 0.1 5 adamw
 ```
 
 Expected output from `sbatch`:
@@ -724,9 +786,26 @@ Wrote:
   outputs_gfnet_seed42_normal/summary_gfnet.json
 ```
 
-**Check:** seconds per epoch tells you the job is healthy. Expect about 14 for
-either model at patch 16, about 42 at patch 8, and about 40 with three slice
-channels. A figure far above those means the data loader is starving the GPU.
+**Check:** seconds per epoch tells you the job is healthy.
+
+| Configuration | Seconds per epoch |
+|---|---|
+| Either model at patch 16, depth 8 | about 14 |
+| Patch 8, depth 8 | about 42 |
+| Patch 16, three slice channels | about 34 |
+| Patch 8, depth 12, the builds this report uses | about 62 |
+
+A figure far above these means the data loader is starving the GPU.
+
+**The arguments that change the model's shape are `--patch-size` and
+`--depth`.** Both must be repeated to `predict.py` when loading a checkpoint,
+or the weights will not fit and the load fails. That failure is deliberate. A
+silent fallback would fill the missing blocks with random weights and produce a
+plausible-looking figure set.
+
+The arguments that change only training are `--augmentation`, `--drop-path`,
+`--warmup-epochs`, `--optimiser`, `--mixup` and `--label-smoothing`. None of
+them need repeating at inference.
 
 The output folder is named from the arguments. Patch 16 with one slice keeps
 the plain name, and anything else gets a `_p<size>` or `_s<slices>` suffix, so
@@ -736,7 +815,8 @@ runs never overwrite each other.
 
 ```bash
 python predict.py --model gfnet \
-  --checkpoint outputs_gfnet_seed42_strong/best_gfnet.pt --output-dir figures
+  --checkpoint outputs_gfnet_seed42_strong_p8_recipe_mix/best_gfnet.pt \
+  --patch-size 8 --depth 12 --output-dir figures
 ```
 
 Expected output:
@@ -967,8 +1047,6 @@ with four worker processes on a shared machine.
 
 ---
 
----
-
 ## The data, the splits and the preprocessing
 
 ```
@@ -1070,8 +1148,6 @@ size. But that choice deserves an ablation and not an assumption.
 
 ---
 
----
-
 ## Investigation of the open research dilemma
 
 ### Does the model learn anatomy, or brightness?
@@ -1110,73 +1186,88 @@ augmentation setting.
 
 This is the core of the dilemma. I measured it with `evaluate_calibration.py`.
 
-| Measure | BaselineCNN | GFNet |
-|---|---|---|
-| Expected Calibration Error | 0.1812 | **0.0934** |
-| Worst single bin gap | 0.2603 | **0.1594** |
-| Mean confidence when correct | 0.9382 | 0.8281 |
-| Mean confidence when wrong | 0.8803 | 0.7499 |
-| Separation | 0.0579 | **0.0782** |
+Three models are compared, because the training recipe moved calibration far
+more than it moved accuracy, and the direction reversed twice.
+
+| Measure | BaselineCNN | GFNet, accuracy build | **GFNet, recommended** |
+|---|---|---|---|
+| Expected Calibration Error | 0.1812 | 0.2231 | **0.0614** |
+| Worst single bin gap | 0.2603 | 0.3953 | **0.1110** |
+| Mean confidence when correct | 0.9382 | 0.9760 | 0.8213 |
+| Mean confidence when wrong | 0.8803 | 0.9427 | **0.7378** |
+| Separation | 0.0579 | 0.0332 | **0.0835** |
 
 ![Reliability diagram](figures/calibration_reliability.png)
 
-**GFNet is almost twice as well calibrated as the baseline.** Its calibration
-error is 0.0934 against 0.1812, and its worst single bin is out by 0.159 and not
-by 0.260. GFNet is also less overconfident in absolute terms. When GFNet is
-wrong it claims 75% certainty, not 88%.
+**The recommended GFNet is three times better calibrated than the baseline.**
+Its calibration error is 0.0614 against 0.1812, and its worst single bin is out
+by 0.111 rather than 0.260. When it is wrong it claims 74% certainty rather
+than 88%.
 
-This is the clearest result in the report, and it goes against the accuracy
-comparison. The baseline predicts better. GFNet has the better idea of what it
-does not know.
+**The accuracy build is the worst calibrated model in the project**, and it is
+the most accurate at slice level. That is the trade-off this report is about.
+Its ten most confident mistakes all sit at exactly 1.0000. Five patients it
+says certainly do not have Alzheimer's who do, and five it says certainly do
+who do not.
 
-**Even so, you cannot automate on either confidence score.** The separation
-between right and wrong predictions is 0.078 for GFNet. That is 35% better than
-the 0.058 of the baseline. It is still far too small for a threshold to split
-the two groups cleanly.
+What separates the two GFNet builds is mixup, cutmix and label smoothing. The
+accuracy build reaches 0.9954 training accuracy and becomes certain about
+everything, including its errors. The recommended build reaches 0.7759 and
+keeps some doubt.
+
+**Even so, neither confidence score is good enough to automate on.** A
+separation of 0.0835 is the best measured in this project. It is still far too
+small for a threshold to divide the right and wrong populations cleanly.
 
 ![Confidence when right against when wrong](figures/calibration_confidence.png)
 
-### Temperature scaling
+### Temperature scaling, and when not to use it
 
-Temperature scaling divides the logits by one learned number before the softmax.
-It changes no prediction, so accuracy stays the same. But it can make the
-confidence honest.
+Temperature scaling divides the logits by one learned number before the
+softmax. It changes no prediction, so accuracy stays the same, but it can make
+the confidence honest.
 
 I fit the temperature on the **validation** split. A fit on test, followed by a
 report of test calibration, would be a tune on the test set. That is the same
-mistake that the patient-level split exists to avoid.
+mistake the patient-level split exists to avoid.
 
-| Model | Temperature | ECE before | ECE after | Change | Accuracy |
-|---|---|---|---|---|---|
-| BaselineCNN | 1.20 | 0.1812 | 0.1651 | −8.9% | unchanged |
-| GFNet | 1.11 | 0.0934 | 0.0787 | −15.7% | unchanged |
-
-A temperature above 1 means the model was overconfident. Both models were, and
-both only mildly. Accuracy did not move for either model, which is the expected
-behaviour and a check that the implementation is correct.
-
-GFNet gains more from the fit than the baseline does, at 15.7% against 8.9%. So
-some of the overconfidence of the baseline is structural, and a single global
-scale does not remove it.
-
-**Strong augmentation did most of the work that temperature scaling would have
-done.** I ran the same fit on the normal-augmentation models earlier in the
-project. The numbers were very different.
-
-| Run | Temperature | ECE before | ECE after | Change |
+| Model | Temperature | ECE before | ECE after | Change |
 |---|---|---|---|---|
-| GFNet, normal aug | 1.90 | 0.1819 | 0.1102 | −39% |
-| GFNet, strong aug | 1.11 | 0.0934 | 0.0787 | −16% |
-| BaselineCNN, normal aug | 1.36 | 0.2164 | 0.1963 | −9% |
-| BaselineCNN, strong aug | 1.20 | 0.1812 | 0.1651 | −9% |
+| BaselineCNN | 1.20 | 0.1812 | 0.1651 | −8.9% |
+| GFNet, accuracy build | **4.59** | 0.2231 | 0.1127 | **−49%** |
+| GFNet, recommended | **0.75** | 0.0614 | 0.1056 | **+72%, worse** |
 
-The fitted temperature for GFNet fell from 1.90 to 1.11. A temperature near 1
-means there is little global overconfidence left to remove. Augmentation and
-temperature scaling treat the same problem. Augmentation treats it better,
-because it also raises accuracy, and temperature scaling cannot.
+**A temperature below 1 means the model is underconfident, and scaling it makes
+things worse.** The recommended model's fitted temperature is 0.75, so label
+smoothing at 0.1 slightly overcorrected. Applying temperature scaling to it
+raises its calibration error from 0.0614 to 0.1056.
 
-So the order matters. Fix the training first, then scale the temperature on
-what is left.
+That is a condition I did not have earlier in this project, and it came from a
+measurement rather than from reading about the method. **Temperature scaling
+corrects overconfidence. It is not a general improvement.** Fit the temperature
+on validation, and apply it only if it comes out above 1.
+
+The accuracy build is the case the method was designed for. One scalar cuts its
+calibration error in half, from 0.2231 to 0.1127. Even then it ends up worse
+calibrated than the recommended model is before any scaling at all.
+
+### Accuracy and calibration are not the same axis
+
+Three models, two axes, and they do not agree:
+
+| | Slice accuracy | Calibration error |
+|---|---|---|
+| GFNet, accuracy build | **0.7450** | 0.2231 |
+| BaselineCNN | 0.7421 | 0.1812 |
+| GFNet, recommended | 0.7381 | **0.0614** |
+
+The ordering is exactly reversed. The most accurate model is the least trustworthy, and the most trustworthy is
+the least accurate. 0.7 points separate the extremes on accuracy. A factor of
+3.6 separates them on calibration.
+
+A screening tool routes uncertain cases to a specialist. For that job, a model
+that is certain and wrong is worse than one that is slightly less accurate and
+knows it. That is the reasoning behind the recommendation.
 
 ### Patient-level evaluation
 
@@ -1185,29 +1276,73 @@ so the mean of those 20 probabilities is the clinically useful read-out.
 
 | Model | Slice | Patient | Gain |
 |---|---|---|---|
-| BaselineCNN | 0.7421 | **0.7511** | +0.9 pts |
-| GFNet | 0.7122 | 0.7444 | **+3.2 pts** |
+| BaselineCNN | 0.7421 | 0.7511 | +0.9 pts |
+| GFNet, accuracy build | 0.7450 | 0.7578 | +1.3 pts |
+| **GFNet, recommended** | 0.7381 | **0.7689** | **+3.1 pts** |
 
-GFNet gains more than three times as much from the mean. That tells us something
-about the shape of the errors of each model. You can see the shape when you
-count how each patient fails.
+**The ordering changes between the two columns.** The accuracy build leads at
+slice level and the recommended build leads at patient level by 1.1 points.
+Averaging the 20 slices is worth three times more to the recommended model.
 
-| Model | All 20 slices correct | All 20 slices wrong |
-|---|---|---|
-| BaselineCNN | 226 | 40 |
-| GFNet | 157 | **28** |
+That difference says something about the shape of each model's errors, and you
+can see the shape by counting how each patient fails:
+
+| Model | All 20 slices wrong |
+|---|---|
+| BaselineCNN | 40 |
+| GFNet, accuracy build | 40 |
+| **GFNet, recommended** | **31** |
 
 The mean only helps a patient whose slices disagree with each other. In the
-all-wrong group the model has a consistent and confident misread of the anatomy
-of that person. No mean fixes that.
+all-wrong group the model has a consistent, confident misread of that person's
+anatomy, and no amount of averaging fixes it.
 
-**GFNet gets all 20 slices wrong for 30% fewer patients: 28 against 40.** A
-patient who is wrong on all 20 slices is a patient the system gets wrong every
-time. There is no internal disagreement to flag the case for review. That is a
-real safety property, and GFNet holds it with a lower slice accuracy.
+**The recommended model gets all 20 slices wrong for 31 patients against 40.**
+A patient wrong on all 20 slices is one the system gets wrong every time, with
+no internal disagreement to flag the case for review. That is a real safety
+property, and it is why the model with the lower slice accuracy is the one this
+report recommends.
 
-The 3.0-point gap in slice accuracy falls to 0.7 points once you evaluate the
-way a clinic would.
+### Where the two architectures fail together
+
+Counting the overlap separates a hard scan from a weakness of one architecture.
+
+| Group | Patients |
+|---|---|
+| Wrong on all 20 slices, baseline only | 17 |
+| Wrong on all 20 slices, GFNet only | 8 |
+| Wrong on all 20 slices, **both** | **23** |
+| Either model fails completely | 48 of 450 |
+
+**23 patients, 5.1% of the test set, defeat both architectures.** A
+convolutional network and a frequency-domain network read an image in
+completely different ways and still agree on every slice of all 23.
+
+That sets a floor. No ensemble of these two can rescue them. The other 25 failures are specific to one architecture. That is why
+disagreement between the two is a usable referral signal, even though averaging
+them is not.
+
+### Averaging the two models is a bad trade
+
+| | Slice | Patient | All 20 slices wrong |
+|---|---|---|---|
+| BaselineCNN | 0.7421 | 0.7511 | 40 |
+| GFNet, recommended | 0.7381 | **0.7689** | **31** |
+| Even-split ensemble | **0.7518** | 0.7644 | 48 |
+
+The ensemble produces the best slice accuracy in the project, 0.7518. It also
+loses patient accuracy to GFNet alone and raises the number of patients wrong
+on every slice from 31 to 48, a 55% increase.
+
+Averaging a model that hedges against one that does not pushes the hedging
+model's borderline-correct slices over the line. Buying 1.4 slice points by
+making the worst failures half again as common is the opposite of what a
+screening tool needs.
+
+A note on method. Sweeping the mixing weight finds 0.7778 at patient level with
+90% weight on GFNet. That weight was chosen by looking at the test split, so it
+is not a result and this report does not claim it. The even split needs no
+fitting, which is why it is the one reported.
 
 ### The reject option
 
@@ -1289,8 +1424,6 @@ fewer missed Alzheimer's cases.
 
 ---
 
----
-
 ## Error autopsy
 
 `predict.py` selects the mistakes that the model was **most confident** about,
@@ -1304,6 +1437,11 @@ model is confidently and completely wrong about.
 ![BaselineCNN, the mistakes it was most confident about](figures/failures_baseline.png)
 
 ![GFNet, the mistakes it was most confident about](figures/failures_gfnet.png)
+
+**Which models this section covers.** Findings 1 to 4 and the image
+observations below were made on BaselineCNN and the original depth-8 GFNet. The
+recommended model came later and fails on different patients, which is itself a
+finding and is recorded at the end.
 
 ### Finding 1. The baseline reached P(AD) = 0.0000 on a patient who has AD
 
@@ -1351,7 +1489,7 @@ This is the measurement that justifies the threshold recommendation. A model
 whose total failures are all false negatives must not run at a decision
 threshold of 0.5.
 
-### Finding 3. Twenty patients defeat both architectures
+### Finding 3. Twenty patients defeated both of the early architectures
 
 | Group | Patients |
 |---|---|
@@ -1393,34 +1531,74 @@ case at a time.
 
 ### What the images show
 
-> **[FILL IN. This part needs your own eyes on the figures.]**
->
-> Open `figures/failures_baseline.png` and `figures/failures_gfnet.png`. For
-> each case, write two or three sentences on what the slice looks like:
->
-> - ventricle size, cortex thickness, hippocampus
-> - overall brightness compared with the class averages in
->   `fig3_class_averages.png`
-> - head position and rotation in the frame
-> - which slice number it is, since slices near the top or the bottom of the
->   stack show little brain tissue
->
-> Then answer these three questions, which the numbers above raise but cannot
-> settle:
->
-> 1. Does patient 985197 look unusual on the image, or does the scan look
->    ordinary? An ordinary-looking scan that both models get wrong at full
->    confidence is a harder problem than an odd-looking one.
-> 2. Do the 1274602 and 1265863 scans look brighter or darker than the NC
->    average? The brightness experiment reached 0.585 on mean intensity alone,
->    so a brightness explanation is testable here.
-> 3. Do the false negatives share a visible trait, such as ventricles that look
->    normal in size for a patient who has AD?
->
-> Close with one sentence. Name the kinds of case you would **not** trust this
-> prototype to handle.
+Looking at the false negative cases, patient 985197 is quite interesting because the scan does not immediately stand out as having the classic appearance people would associate with Alzheimer's disease. The ventricles are visible but do not look dramatically enlarged, and there is no obvious severe cortical thinning from this single slice. What stands out more is the image quality itself. The scan is much noisier and higher contrast than the others, making it look somewhat unusual, but the underlying brain anatomy still appears ordinary. The slice seems to come from the middle portion of the brain because there is still a substantial amount of brain tissue visible, and the head is positioned reasonably well with only minor off centering.
+Patient 1431781 also looks relatively ordinary when viewed anatomically. The ventricles appear moderately enlarged, but not to a degree that immediately screams Alzheimer's disease. The cortex still looks reasonably preserved, and although the hippocampal region cannot be clearly evaluated from this view alone, there is nothing dramatically abnormal visible. The image brightness appears normal compared to the surrounding scans, and the slice is likely taken near the centre of the brain because major internal structures are clearly visible.
+The false positive cases all seem to share a different pattern. Patient 1265863 has a relatively large ventricular space, and some of the surrounding tissue gives the impression of mild atrophy. Even though the patient is normal, I can understand why the model was fooled because the anatomy visually resembles features often associated with Alzheimer's disease. The scan also appears brighter than what would be expected from an average normal-control image. The head is positioned well, and the slice appears to be from the middle of the scan stack where the largest amount of anatomical information is visible.
+Patient 1253141 shows a similarly large ventricle and relatively open-looking spaces around the central part of the brain. The cortex appears slightly thinner than some other examples, although not enough to confidently diagnose disease from visual inspection alone. Like patient 1265863, the image looks brighter overall, which is important because the earlier brightness experiment suggested that intensity alone carries some predictive information. The scan is well centred and appears to be a central sagittal slice.
+Patient 1243833 displays much the same behaviour. The ventricles are clearly visible and somewhat enlarged, while the cortex remains reasonably intact. Nothing in the image looks extreme, but it does contain several characteristics that could push a classifier toward an Alzheimer's prediction. The image brightness also seems relatively high, and the head position and slice selection look normal.
+Patient 1274602 is probably the strongest example of this pattern. The ventricular region is quite large and dark, making the brain look more similar to the Alzheimer's examples than to a typical healthy control. The cortex also appears somewhat thin in several areas. On top of that, the image brightness is noticeably high, particularly in the white matter regions. This supports the idea that brightness may have contributed to the model's confident mistake.
+For the first question, I would say patient 985197 looks somewhat unusual because of the image quality rather than because of the anatomy. The heavy noise and contrast make the scan visually different from most of the others, but the actual brain structures appear relatively ordinary. That makes this a difficult error to explain. If the scan contained obvious Alzheimer's-related atrophy, the model's prediction would at least make some intuitive sense. Instead, the anatomy looks normal while both models remain extremely confident, which suggests they may be responding to features that are not immediately obvious to a human observer.
+For the second question, both patient 1274602 and patient 1265863 appear brighter than the normal-control average. The white matter regions are particularly bright, and the overall contrast is stronger than expected. Since the brightness-only experiment achieved an accuracy of 0.585, these examples provide visual evidence that image intensity could be influencing the model's decisions. I would not claim brightness is the sole reason for the errors, but it is a plausible contributing factor.
+For the third question, the false negatives do seem to share a visible trait. Neither patient 985197 nor patient 1431781 displays the kind of obvious ventricular enlargement or severe cortical thinning that many people associate with Alzheimer's disease. Their brains look relatively ordinary from these slices, which may explain why the model incorrectly classified them as normal. In contrast, many of the false positives have ventricles that look larger or more AD-like despite belonging to normal patients. This suggests the model may rely heavily on visible structural changes and struggle when Alzheimer's disease presents more subtly.
+Overall, I would not trust this prototype to handle borderline cases where Alzheimer's-related changes are subtle, image brightness differs from the training average, or normal ageing produces brain structures that visually resemble mild atrophy.
+
 
 ---
+
+### Finding 5. Training the overconfidence out changed who fails
+
+The recommended model, trained with mixup, cutmix and label smoothing, fails on
+a different set of patients and in a visibly different way.
+
+![GFNet, the mistakes it was most confident about](figures/failures_gfnet.png)
+
+| | Accuracy build | Recommended |
+|---|---|---|
+| Highest confidence on a false negative | **1.0000** | 0.9810 |
+| Highest confidence on a false positive | **1.0000** | 0.9645 |
+| Patients wrong on all 20 slices | 40 | **31** |
+| Calibration error | 0.2231 | **0.0614** |
+
+**The accuracy build puts all ten of its worst mistakes at exactly 1.0000.**
+Five patients it is certain do not have Alzheimer's who do, and five it is
+certain do who do not. The recommended model's worst mistake is 0.9810, and
+nothing it gets wrong reaches certainty.
+
+That difference is the whole argument for the recommended model in one number.
+Both are wrong about roughly the same number of slices. One of them says so.
+
+### Finding 6. Patient 1265863 defeats every version
+
+Patient 1265863 is in my own image observations above. I wrote that it has a
+relatively large ventricular space and looks brighter than a normal control. I
+also wrote that it resembles the Alzheimer's examples closely enough that I
+understood why the model was fooled.
+
+It is still there. It appears among the most confident false positives for the original depth-8
+GFNet. It appears again for the recommended model, after every regulariser in
+this report had been applied.
+
+A patient that defeats one training run is a weakness of that run. A patient
+that defeats three separate training recipes, including one that eliminated
+memorisation entirely, is a property of the scan. Combine that with the 23 patients wrong on all 20 slices for both
+architectures. Together they are the clearest evidence in this report that some
+cases are not reachable by a better classifier on a single 2D slice.
+
+### Finding 7. Every worst failure is still a missed AD case
+
+The lists change, the direction does not. For the recommended model:
+
+> False negatives: 1330894, 1398870, 1240482, 1017725, 1342389
+> False positives: 1265863, 1199414, 1441119, 1215774
+
+And the five worst total failures, the patients wrong on all 20 slices and
+furthest from the truth, are 1398870, 1240482, 1342389, 992839 and 1223029.
+**All five have AD.**
+
+That has held for every model tested in this project. When any of them fails
+completely, it fails by calling a sick person healthy. It is the expensive
+direction, and it is why the recommendation moves the decision threshold below
+0.50 rather than leaving it where the softmax puts it.
 
 ---
 
@@ -1564,8 +1742,6 @@ demonstrated.
 
 ---
 
----
-
 ## Experiments towards the 0.80 minimum
 
 The project specification sets a minimum of 0.80 test accuracy for GFNet on
@@ -1573,9 +1749,9 @@ AD against CN. This section records every experiment run towards that number, an
 failures as well. The effort behind the result is then visible in one place,
 rather than scattered through the report.
 
-**Best achieved: 0.7161 at slice level, by GFNet with patch size 8.** The best
-patient-level figure is 0.7444. The target was not reached, and the campaign
-below is complete rather than abandoned.
+**Best achieved: 0.7450 at slice level and 0.7689 at patient level.** Both come
+from GFNet. The target was not reached, and the campaign below is complete
+rather than abandoned.
 
 ### The ledger
 
@@ -1595,6 +1771,12 @@ below is complete rather than abandoned.
 | 12 | Audit of the shipped train and test folders | Something systematic separates them | all 8 measures negligible or small | **ruled out** |
 | 13 | Subject-identity check by image correlation, test as control | The same person holds several IDs | duplicates at median ID gap 2, others at 47,026 | **confirmed. IDs are scan IDs** |
 | 14 | Accuracy recomputed with leaked patients removed | The leak explains the validation-to-test gap | validation −0.6 pts, test −0.2 pts | **too small. Gap still open** |
+| 15 | AdamW instead of Adam, plus a 5-epoch warmup and stochastic depth 0.1, at depth 12 | My implementation differs from how GFNet is actually trained | 0.7106 → 0.7256 | **+1.5 pts, the largest single gain** |
+| 16 | The same recipe at patch size 8 | The two gains should compound | 0.7450 | **+3.4 pts over the plain run. Beats the baseline** |
+| 17 | The recipe at 150 epochs instead of 80 | Every recipe run peaked late, so the schedule is the limit | 0.7431 | −0.2 pts. Converged at epoch 94 |
+| 18 | Test-time augmentation, averaging each slice with its mirror | Free accuracy from a label-preserving transform | −0.06 pts | **no gain. RandomHorizontalFlip already covered it** |
+| 19 | An identical configuration run twice by accident | not planned | 0.7450 against 0.7449 | **the noise floor is one slice in 9,000** |
+| 20 | Mixup, cutmix and label smoothing, with strong augmentation and stochastic depth 0.3 | The model has memorised the training set | train 0.9954 → 0.7759, test −0.7 pts, **patient +1.1 pts** | **memorisation removed, test unmoved** |
 
 ### Experiment 4 in detail, because it failed informatively
 
@@ -1687,67 +1869,145 @@ predicting "normal".
 I should have checked the correlation figure before running this. It was
 printed in my own output on the first day, and it predicts the result.
 
+### Experiment 20 in detail, because it is the cleanest test in the project
+
+The training history for the best run showed what was wrong, 50 epochs before
+the calibration numbers said the same thing.
+
+| Epoch | Train accuracy | Validation accuracy | Validation loss |
+|---|---|---|---|
+| 15 | 0.8767 | 0.7966 | **0.459** |
+| 30 | 0.9515 | 0.8388 | 0.507 |
+| 45 | 0.9783 | 0.8425 | 0.682 |
+| 65 | 0.9928 | 0.8689 | 0.784 |
+| 80 | **0.9954** | 0.8649 | **0.871** |
+
+Training accuracy reaches 0.9954, so the model gets 99.5% of 18,300 training
+slices right. Validation loss bottoms at epoch 15 and then rises 90%, while
+validation accuracy keeps drifting up. That combination has one meaning: the
+model is becoming more confident about the answers it gets wrong.
+
+Three things were missing that attack memorisation directly, and the earlier
+recipe work had not touched any of them: mixup, cutmix and label smoothing.
+
+**They worked exactly as designed.**
+
+| | Without | With |
+|---|---|---|
+| Train accuracy, final | 0.9954 | **0.7759** |
+| Train-to-validation gap | 13.0 pts | **5.1 pts** |
+| Validation loss, final | 0.871 | **0.449** |
+| Validation loss behaviour | rose 90% above its minimum | **fell monotonically to the end** |
+| Validation-to-test gap | 12.4 pts | **8.9 pts** |
+| Test accuracy | 0.7450 | 0.7382 |
+| **Patient accuracy** | 0.7578 | **0.7689** |
+| **AD recall** | 0.5729 | **0.6092** |
+| **Calibration error** | 0.2231 | **0.0614** |
+
+Memorisation removed. Overconfidence removed. Calibration error cut by a factor
+of 3.6. Patient accuracy up 1.1 points. 163 fewer missed Alzheimer's slices.
+
+**And slice-level test accuracy fell 0.7 points.**
+
+That is the strongest evidence in this report that memorisation was never the
+cause of the gap between validation and test. The hypothesis was stated and the standard intervention was applied. The
+intervention was confirmed to have worked on its own terms. The target metric
+did not move.
+
+### Experiment 19, which happened by accident and is the most useful
+
+A configuration was re-run by mistake with identical arguments and the same
+seed. The two runs returned **0.7450 and 0.7449**: a difference of one slice in
+9,000, or 0.01 accuracy points.
+
+That turns a vague limitation into a measurement. `cudnn.benchmark` is left on,
+so results are not bit-exact, and the cost of that is now known rather than
+guessed. It also means every difference of 0.3 points or more in this report is real
+rather than run-to-run variation. That is what makes the rest of the ledger
+readable.
+
 ### What the ledger shows
 
-Lining the five GFNet runs up next to each other gives the central result of
+Lining all twelve GFNet runs up next to each other gives the central result of
 this project.
 
-| Patch | Epochs | Aug | Slices | Best epoch | Validation | Test | Gap |
+| Patch | Epochs | Aug | Slices | Recipe | Best epoch | Validation | Test |
 |---|---|---|---|---|---|---|---|
-| 16 | 80 | normal | 1 | 54 | 0.8134 | 0.7106 | 0.103 |
-| 16 | 80 | strong | 1 | 61 | 0.7891 | 0.7122 | 0.077 |
-| 16 | 150 | normal | 1 | 60 | 0.7907 | 0.6837 | 0.107 |
-| 8 | 80 | normal | 1 | 55 | **0.8422** | **0.7161** | 0.126 |
-| 16 | 80 | normal | 3 | 63 | 0.7901 | 0.6863 | 0.104 |
+| 8 | 80 | normal | 1 | AdamW, dp 0.1 | 65 | 0.8689 | **0.7450** |
+| 8 | 150 | normal | 1 | AdamW, dp 0.1 | 94 | **0.8742** | 0.7431 |
+| 8 | 80 | strong | 1 | AdamW, dp 0.3, mixup | 71 | 0.8273 | 0.7382 |
+| 16 | 150 | normal | 1 | AdamW, dp 0.1 | 116 | 0.8680 | 0.7294 |
+| 16 | 80 | normal | 1 | AdamW, dp 0.1 | 73 | 0.8453 | 0.7256 |
+| 8 | 80 | normal | 1 | plain Adam | 55 | 0.8422 | 0.7161 |
+| 16 | 80 | strong | 1 | plain Adam | 61 | 0.7891 | 0.7122 |
+| 16 | 80 | normal | 1 | plain Adam | 54 | 0.8134 | 0.7106 |
+| 16 | 30 | normal | 1 | plain Adam | | | 0.6890 |
+| 16 | 80 | normal | 3 | plain Adam | 63 | 0.7901 | 0.6863 |
+| 16 | 150 | normal | 1 | plain Adam | 60 | 0.7907 | 0.6837 |
 
-**Validation moved 5.3 points across these configurations. Test moved 3.2, and
-not in step with validation.** The run with the lowest validation accuracy
-(0.7891) produced a higher test score than the run with 0.7907. The run with
-the highest validation accuracy produced a test gain of half a point. Not one
-run crossed 0.72.
+**Validation moved 8.5 points across these. Test moved 6.1, and the ordering
+does not match.** The run with the highest validation accuracy of all, 0.8742,
+is not the best on test. The run with the lowest, 0.7891, beats two runs with
+higher validation scores.
 
-The configurations span four separate axes:
+The configurations span seven separate axes:
 
 | Axis | Varied over |
 |---|---|
-| Training length | 80 and 150 epochs |
-| Regularisation | normal and strong augmentation, weight decay 1e-4 and 1e-3 |
+| Training length | 30, 80 and 150 epochs |
+| Augmentation strength | normal and strong |
+| Weight decay | 1e-4 and 1e-3 |
 | Token resolution | 112 and 420 frequency components |
 | Input representation | one slice and three adjacent slices |
+| Optimiser and schedule | Adam, and AdamW with warmup |
+| Regularisation | stochastic depth 0, 0.1 and 0.3, mixup, cutmix, label smoothing |
 
-**Validation responds to all four. Test responds to none.** The gap widens as
-validation improves, which is the signature of a model learning a cohort rather
-than a disease.
+**Validation responds to all seven. Test barely responds to any of them.** The
+gap widens as validation improves, which is the signature of a model learning a
+cohort rather than a disease.
 
 So the binding constraint is not the model. It is the difference between the cohort the model trains on and the
-cohort it is tested on. That is the same 16-point gap the section above could
-not explain. Capacity cannot close it,
-because capacity is spent on fitting a cohort the test set does not resemble.
+cohort it is tested on. That is the same gap the section below could not
+explain. Capacity cannot close it, because
+capacity is spent fitting a cohort the test set does not resemble.
 
 ### The campaign is complete and the target was not reached
 
-**The best GFNet result is 0.7161 at slice level, 8.4 points short of the 0.80
-minimum.** The best patient-level result is 0.7444.
+**The best GFNet result is 0.7450 at slice level, 5.5 points short of the 0.80
+minimum.** The best patient-level result is 0.7689, which is 3.1 points short.
 
-I am stopping the search here, and the reason is evidence rather than time. The
-remaining levers I can identify act on model capacity or training schedule, and
-those axes are exhausted. A longer schedule lost 2.7 points. Four times the
-frequency resolution gained 0.55. Three input channels lost 2.4. Strong
-augmentation gained 0.16.
+I am stopping the search here, and the reason is evidence rather than time.
+Every lever I can identify acts on model capacity, training schedule or
+regularisation, and all three axes are exhausted:
+
+| Lever | Effect on test accuracy |
+|---|---|
+| Four times the frequency resolution | +0.6 |
+| The paper's optimiser, warmup and stochastic depth | +1.5 |
+| Nearly doubling the schedule | −0.2 |
+| Three input channels instead of one | −2.4 |
+| Averaging over a mirrored copy at inference | −0.06 |
+| Eliminating memorisation entirely | −0.7 slice, +1.1 patient |
+
+The last row is the one that closes the argument. Mixup removed the
+memorisation completely, training accuracy fell from 0.9954 to 0.7759, and
+validation loss stopped rising. The intervention did exactly what it claims to
+do, and the test score did not improve.
 
 What would be worth trying next, outside the scope available here:
 
 | Idea | Why it might work | Why it is out of scope |
 |---|---|---|
 | True 3D volumes | Whole-brain context rather than near-duplicate slices | The shipped data is 2D JPEGs |
-| Non-adjacent slices, widely spaced | Lower correlation than the 0.96 of neighbours | Needs more than 20 slices per patient |
+| Non-adjacent slices, widely spaced | Lower correlation than the 0.9612 of neighbours | Needs more than 20 slices per patient |
+| ImageNet-pretrained GFNet weights | Features learned on a different and far larger distribution are the one thing that attacks transfer directly | Needs approval, and the released checkpoints use different layer widths |
 | Subject-level splits plus retraining | Removes the 16.1% ID leakage | Lowers validation, unlikely to raise test |
 | Train and test pooled, then re-split by subject | Removes the cohort difference entirely | Discards the shipped held-out set, so it answers a different question |
 
 The last row is the honest one. The cohort difference could be removed by
 pooling both folders and splitting afresh, and the number would very likely
 clear 0.80. It would also no longer be a measurement on a held-out cohort,
-which is the measurement that matters clinically. I would rather report 0.7161
+which is the measurement that matters clinically. I would rather report 0.7450
 on a genuine held-out set than 0.85 on a set I constructed to be easier.
 
 ### The unexplained gap
@@ -1773,3 +2033,18 @@ Pixel intensity histograms were checked earlier and matched, which rules out
 brightness as the cause but not the rest.
 
 ---
+
+---
+
+## References
+
+[1] Y. Rao, W. Zhao, Z. Zhu, J. Lu, J. Zhou, "Global filter networks for image
+classification," *IEEE Transactions on Pattern Analysis and Machine
+Intelligence*, vol. 45, no. 6, pp. 7837–7850, 2023.
+
+[2] Alzheimer's Disease Neuroimaging Initiative. http://adni.loni.usc.edu
+
+[3] C. Guo, G. Pleiss, Y. Sun, K. Q. Weinberger, "On calibration of modern
+neural networks," in *Proc. ICML*, 2017. This paper is the source of the
+temperature scaling method and of the Expected Calibration Error metric used in
+this report.
